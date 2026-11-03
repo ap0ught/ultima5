@@ -19,7 +19,7 @@ const { app, BrowserWindow, protocol, net, shell, session, ipcMain } = electron;
 const { join, normalize, basename } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { homedir } = require('node:os');
-const { writeFileSync, existsSync, readdirSync, readFileSync, mkdirSync } = require('node:fs');
+const { writeFileSync, existsSync, readdirSync, readFileSync, mkdirSync, openSync, closeSync, unlinkSync } = require('node:fs');
 const { scanForGameFiles } = require('./scan.cjs');
 const { readState, startsFullScreen, writeState } = require('./windowState.cjs');
 const {
@@ -64,6 +64,23 @@ const exportDir = () => {
   mkdirSync(dir, { recursive: true });
   return dir;
 };
+const reservedExports = new Set();
+function reserveExportName(name) {
+  if (typeof name !== 'string' || basename(name) !== name || !/\.json$/i.test(name)) return null;
+  const ext = name.slice(-5);
+  const stem = name.slice(0, -5);
+  for (let suffix = 0; suffix < 100_000; suffix++) {
+    const candidate = suffix ? `${stem} (${suffix})${ext}` : name;
+    try {
+      closeSync(openSync(join(exportDir(), candidate), 'wx'));
+      reservedExports.add(candidate);
+      return candidate;
+    } catch (e) {
+      if ((e).code !== 'EEXIST') throw e;
+    }
+  }
+  throw new Error('No unused export filename is available');
+}
 
 protocol.registerSchemesAsPrivileged([
   { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
@@ -178,7 +195,20 @@ app.whenReady().then(() => {
   // Downloads are exports too: save them directly to Downloads/Ultima5 instead of opening Electron's native save dialog,
   // which is outside the game's gamepad-controlled input path.
   session.defaultSession.on('will-download', (_event, item) => {
-    item.setSavePath(join(exportDir(), item.getFilename()));
+    const name = reservedExports.has(item.getFilename()) ? item.getFilename() : reserveExportName(item.getFilename());
+    if (!name) return;
+    const path = join(exportDir(), name);
+    item.setSavePath(path);
+    item.once('done', (_downloadEvent, state) => {
+      reservedExports.delete(name);
+      if (state !== 'completed') {
+        try {
+          unlinkSync(path);
+        } catch {
+          /* already removed */
+        }
+      }
+    });
   });
   // The installer's Scan for game files... (preload.cjs): the copies scan.cjs finds, only the files the page names.
   // Only the game's own page (the app:// scheme) may ask; a frame from anywhere else is answered with no copies.
@@ -198,6 +228,7 @@ app.whenReady().then(() => {
   // A newer version (updates.cjs), for the game to say in its own way (preload.cjs u5native.updates): the offer, taking
   // it up, the player told of it. Only the game's own page may ask.
   const fromGame = (event) => String(event.senderFrame?.url ?? '').startsWith('app://');
+  ipcMain.handle('reserve-export-file', (event, name) => (fromGame(event) ? reserveExportName(name) : null));
   const updatesFile = join(app.getPath('userData'), 'updates.json');
   ipcMain.handle('update-offer', (event) => (fromGame(event) ? currentOffer() : null));
   ipcMain.handle('update-apply', (event) => fromGame(event) && applyUpdate({ electron }));
@@ -212,7 +243,7 @@ app.whenReady().then(() => {
   const downloadFiles = () => {
     try {
       return readdirSync(exportDir(), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && /\.json$/i.test(entry.name))
+        .filter((entry) => entry.isFile() && /\.json$/i.test(entry.name) && !reservedExports.has(entry.name))
         .map((entry) => entry.name)
         .sort((a, b) => a.localeCompare(b));
     } catch {

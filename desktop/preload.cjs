@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('u5native', {
     list: () => ipcRenderer.invoke('list-import-files'),
     read: (name) => ipcRenderer.invoke('read-import-file', name),
   },
+  exports: {
+    reserve: (name) => ipcRenderer.invoke('reserve-export-file', name),
+  },
   // A newer version (updates.cjs; web/src/ui/updates.ts): what it is, taking it up, the player told of it.
   updates: {
     offer: () => ipcRenderer.invoke('update-offer'),

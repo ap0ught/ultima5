@@ -185,16 +185,19 @@ function pickFile(): Promise<string> {
 }
 
 /** `text` saved as a file named `name`, by the browser's download. */
-function saveFile(text: string, name: string): Promise<string> {
+async function saveFile(text: string, name: string): Promise<string> {
+  const native = (window as { u5native?: { exports?: { reserve: (name: string) => Promise<string | null> } } }).u5native?.exports;
+  const actualName = native ? await native.reserve(name) : name;
+  if (!actualName) throw new Error('No unused export filename is available');
   const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = name;
+  a.download = actualName;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  return Promise.resolve(name);
+  return actualName;
 }
 
 /** The Android app's GameFolder plugin, its half for Export (mobile/.../GameFolderPlugin.java saveFile). */
