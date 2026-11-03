@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { menuKey, nextFocus, padStart, padStep, type PadReading, type Place } from '../src/ui/pageMenu.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { driveMenu, menuKey, nextFocus, padStart, padStep, type PadReading, type Place } from '../src/ui/pageMenu.ts';
+
+/** An indexed collection without array methods, as an older WebView may return. */
+function indexed<T>(values: T[]): { length: number; [index: number]: T } {
+  const result = { length: values.length } as { length: number; [index: number]: T };
+  for (let i = 0; i < values.length; i++) result[i] = values[i];
+  return result;
+}
+
+afterEach(() => vi.unstubAllGlobals());
 
 /** A button at (left, top), 100 by 40. */
 const at = (left: number, top: number, width = 100): Place => ({ left, top, width, height: 40 });
@@ -67,6 +76,52 @@ function pad(held: number[] = [], axes = [0, 0]): PadReading {
 }
 
 describe('page menu: the gamepad', () => {
+  it('reads an indexed pad list and array-like buttons and axes', () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal('navigator', {
+      getGamepads: () => indexed<Gamepad | null>([null, { connected: false } as Gamepad, gamepad]),
+    });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const document = { activeElement: null as Element | null };
+    vi.stubGlobal('document', document);
+    vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+
+    const gamepad = {
+      connected: true,
+      buttons: indexed(Array.from({ length: 17 }, () => ({ pressed: false }))),
+      axes: indexed([0, 0]),
+    } as unknown as Gamepad;
+    const button = (top: number) => {
+      const b = {
+        focus: vi.fn(() => {
+          document.activeElement = b as unknown as Element;
+        }),
+        click: vi.fn(),
+        getBoundingClientRect: () => ({ left: 0, top, width: 100, height: 40 }),
+        classList: { add: vi.fn(), remove: vi.fn() },
+      };
+      return b;
+    };
+    const first = button(0);
+    const second = button(100);
+    const buttons = [first, second] as unknown as HTMLButtonElement[];
+    const root = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      querySelectorAll: vi.fn(() => []),
+    } as unknown as HTMLElement;
+
+    const close = driveMenu(root, { buttons: () => buttons, first: () => first as unknown as HTMLButtonElement });
+    (gamepad.axes as unknown as { [index: number]: number })[1] = 0.9;
+    callbacks.shift()?.(16);
+
+    expect(second.focus).toHaveBeenCalledOnce();
+    close();
+  });
   it('presses A and B as they are let go, once', () => {
     const s = padStart(pad());
     expect(padStep(s, pad([0]), 0)).toEqual([]);

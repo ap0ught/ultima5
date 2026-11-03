@@ -13,6 +13,7 @@
  */
 
 import { K, Pad, TURN_LEFT, TURN_RIGHT } from '../game/io.ts';
+import { firstConnectedPad } from './connectedPad.ts';
 
 const REPEAT_FIRST_MS = 300;
 const REPEAT_MS = 130;
@@ -22,6 +23,8 @@ const REST = 0.25;
 /** A turn held on the right stick repeats slower than a step: a quarter turn is a lot to overshoot. */
 const TURN_FIRST_MS = 450;
 const TURN_MS = 350;
+/** Battery saver still checks for a controller that the browser failed to announce. */
+const CONNECTION_PROBE_MS = 1000;
 
 /** Standard-mapping button index to what it sends. */
 const BUTTONS: [number, number][] = [
@@ -52,6 +55,8 @@ export class GamepadInput {
 
   /** Whether a frame is asked for, to read the pad in. */
   private reading = false;
+  /** One low-rate fallback probe keeps hot-plug working when gamepadconnected is missed. */
+  private connectionProbe: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly send: (code: number, held?: boolean) => void,
@@ -65,24 +70,38 @@ export class GamepadInput {
 
   /** Reading begun again, where it had stopped (a pad connected, or Battery saver turned off). */
   wake(): void {
+    if (this.connectionProbe !== undefined) {
+      clearTimeout(this.connectionProbe);
+      this.connectionProbe = undefined;
+    }
     if (this.reading) return;
     this.reading = true;
     requestAnimationFrame((now) => {
       this.reading = false;
       this.poll(now);
       if (!this.lazy() || this.connected()) this.wake();
+      else this.probeConnection();
     });
+  }
+
+  /** Retry discovery without restoring full-rate rendering while Battery saver is idle. */
+  private probeConnection(): void {
+    if (this.connectionProbe !== undefined || !this.lazy() || this.connected()) return;
+    this.connectionProbe = setTimeout(() => {
+      this.connectionProbe = undefined;
+      this.wake();
+    }, CONNECTION_PROBE_MS);
   }
 
   /** Whether any pad is connected. */
   private connected(): boolean {
-    const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : [];
-    return pads.some((p) => p?.connected);
+    const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : null;
+    return firstConnectedPad(pads) !== null;
   }
 
   private poll(now: number): void {
-    const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : [];
-    const pad = pads.find((p) => p && p.connected);
+    const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : null;
+    const pad = firstConnectedPad(pads);
     if (!pad) return;
     for (const [i, code] of BUTTONS) {
       const down = pad.buttons[i]?.pressed ?? false;
@@ -93,7 +112,7 @@ export class GamepadInput {
     }
     let dir = 0;
     for (const [i, code] of DPAD) if (pad.buttons[i]?.pressed) dir = code;
-    pad.axes.forEach((v, i) => Math.abs(v) < REST && this.rested.add(i));
+    for (let i = 0; i < pad.axes.length; i++) if (Math.abs(pad.axes[i] ?? 0) < REST) this.rested.add(i);
     const axis = (i: number): number => (this.rested.has(i) ? (pad.axes[i] ?? 0) : 0);
     const [ax, ay] = [axis(0), axis(1)];
     if (dir === 0 && Math.max(Math.abs(ax), Math.abs(ay)) > DEADZONE) {

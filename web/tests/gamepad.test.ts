@@ -1,6 +1,13 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { K, TURN_LEFT } from '../src/game/io.ts';
 import { GamepadInput } from '../src/ui/gamepad.ts';
+
+/** An indexed collection without array methods, as an older WebView may return. */
+function indexed<T>(values: T[]): { length: number; [index: number]: T } {
+  const result = { length: values.length } as { length: number; [index: number]: T };
+  for (let i = 0; i < values.length; i++) result[i] = values[i];
+  return result;
+}
 
 /** A pad as the Gamepad API reports it: its mapping, its axes, no button pressed. */
 const padOf = (mapping: string, axes: number[]) => ({
@@ -24,7 +31,11 @@ function sent(mapping: string, at: (ms: number) => number[]): number[] {
   return out;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 /**
  * A stick's axis is read once it has been seen at rest (gamepad.ts): a pad whose trigger rests at -1 as an axis, or
@@ -85,6 +96,23 @@ describe('a gamepad read lazily', () => {
     expect(f.queued).toBe(0); // unplugged: reading stops
   });
 
+  it('probes for a pad connected after the idle read stopped', () => {
+    const f = frames();
+    let pads: ReturnType<typeof padOf>[] = [];
+    vi.stubGlobal('navigator', { getGamepads: () => pads });
+    new GamepadInput(
+      () => undefined,
+      () => true,
+    );
+    f.next(); // the first read, finding none
+    expect(f.queued).toBe(0);
+    pads = [padOf('standard', [0, 0, 0, 0])];
+    vi.advanceTimersByTime(1000); // the connection event was missed
+    expect(f.queued).toBe(1);
+    f.next();
+    expect(f.queued).toBe(1); // connected: normal refresh polling resumes
+  });
+
   it('reads at every refresh, pad or none, where it is not lazy', () => {
     const f = frames();
     vi.stubGlobal('navigator', { getGamepads: () => [] });
@@ -94,5 +122,45 @@ describe('a gamepad read lazily', () => {
     );
     for (let i = 0; i < 3; i++) f.next();
     expect(f.queued).toBe(1);
+  });
+
+  it('reads an indexed pad list and array-like buttons and axes', () => {
+    const f = frames();
+    const makePad = (connected: boolean) => ({
+      connected,
+      mapping: 'standard',
+      axes: indexed([0, 0]),
+      buttons: indexed(Array.from({ length: 17 }, () => ({ pressed: false }))),
+    });
+    const connected = makePad(true);
+    const disconnected = makePad(false);
+    let pads = indexed([null, disconnected]);
+    vi.stubGlobal('navigator', { getGamepads: () => pads });
+    const sent: number[] = [];
+    const input = new GamepadInput((code) => sent.push(code), () => true);
+
+    f.next();
+    expect(f.queued).toBe(0);
+    pads = indexed([null, disconnected, connected]);
+    input.wake();
+    f.next();
+    expect(f.queued).toBe(1);
+    connected.axes[1] = 0.9;
+    connected.buttons[0].pressed = true;
+    f.next();
+    expect(sent).toEqual([0x100, K.Down]);
+    pads = indexed([]);
+    f.next();
+    expect(f.queued).toBe(0);
+  });
+
+  it('stays idle when the browser has no Gamepad API', () => {
+    const f = frames();
+    vi.stubGlobal('navigator', {});
+    new GamepadInput(() => undefined, () => true);
+
+    f.next();
+
+    expect(f.queued).toBe(0);
   });
 });
