@@ -16,6 +16,7 @@ import { complete, identify, listed, type Candidate, type Identified } from './g
 import { scanOutcome } from './scan.ts';
 import { androidFolder, autoscanAsked, desktopScan, webCopy } from './sources.ts';
 import { saveInstalled } from './store.ts';
+import { readInno } from './inno.ts';
 import { readZip } from './zip.ts';
 import { driveMenu, usable } from '../ui/pageMenu.ts';
 
@@ -69,11 +70,20 @@ async function fromFiles(list: File[]): Promise<Candidate[]> {
 async function expand(files: { path: string; file: File }[]): Promise<Candidate[]> {
   const out: Candidate[] = [];
   for (const { path, file } of files) {
-    const data = new Uint8Array(await file.arrayBuffer());
     if (/\.zip$/i.test(path)) {
+      const data = new Uint8Array(await file.arrayBuffer());
       for (const e of await readZip(data)) out.push({ path: `${path}/${e.path}`, data: e.data });
+    } else if (/\.exe$/i.test(path)) {
+      try {
+        for (const e of await readInno(file)) out.push({ path: `${path}/${e.path}`, data: e.data });
+      } catch (e) {
+        // An installed game folder can contain ordinary DOS executables. Only a
+        // standalone .exe selection is required to be an Inno Setup installer.
+        if (files.length === 1 && path === file.name) throw e;
+        out.push({ path, data: new Uint8Array(await file.arrayBuffer()) });
+      }
     } else {
-      out.push({ path, data });
+      out.push({ path, data: new Uint8Array(await file.arrayBuffer()) });
     }
   }
   return out;
@@ -103,13 +113,13 @@ export function runInstaller(notice?: string): Promise<GameFiles> {
     <div class="box" role="dialog" aria-labelledby="u5-title">
       <h1 id="u5-title">ULTIMA V: WARRIORS OF DESTINY</h1>
       <p>This is a new engine for Ultima V. It plays your own copy of the MS-DOS game, which it does not include.</p>
-      <p data-intro>Scan for it where it is usually kept, or give it the game's folder, its files, or a .zip of them: from a GOG
+      <p data-intro>Scan for it where it is usually kept, or give it the game's folder, its files, a .zip of them, or an Inno Setup installer: from a GOG
          installation, or the Internet Archive's copy. Everything is kept in this game's own storage.</p>
       <p>No copy yet? GOG sells it in <a href="${GOG}" target="_blank" rel="noopener" data-gog>Ultima 4+5+6</a>, with Ultima IV and VI.</p>
       <button type="button" data-scan>Scan for game files…</button>
-      <div class="drop" tabindex="-1">Drop the Ultima V folder, files or .zip here</div>
+      <div class="drop" tabindex="-1">Drop the Ultima V folder, files, .zip or installer here</div>
       <button type="button" data-pick="folder">Choose folder…</button>
-      <button type="button" data-pick="files">Choose files or .zip…</button>
+      <button type="button" data-pick="files">Choose files, .zip or installer…</button>
       <p class="status" aria-live="polite"></p>
       <div class="warn">
         <button type="button" data-warn="install">Install anyway</button>
