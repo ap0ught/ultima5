@@ -59,24 +59,31 @@ async function fromDataTransfer(dt: DataTransfer): Promise<Candidate[]> {
     }
   };
   for (const e of entries) await walk(e, '');
-  return expand(files);
+  return expand(files, entries.length > 1 || entries.some((entry) => entry.isDirectory));
 }
 
 async function fromFiles(list: File[]): Promise<Candidate[]> {
-  return expand(list.map((file) => ({ path: file.webkitRelativePath || file.name, file })));
+  return expand(
+    list.map((file) => ({ path: file.webkitRelativePath || file.name, file })),
+    list.length > 1 || list.some((file) => !!file.webkitRelativePath),
+  );
 }
 
 /** Read each file; open zips and take their contents instead. */
-async function expand(files: { path: string; file: File }[]): Promise<Candidate[]> {
+async function expand(files: { path: string; file: File }[], keepNonInstallers = false): Promise<Candidate[]> {
   const out: Candidate[] = [];
   for (const { path, file } of files) {
-    const data = new Uint8Array(await file.arrayBuffer());
     if (/\.zip$/i.test(path)) {
-      for (const e of await readZip(data)) out.push({ path: `${path}/${e.path}`, data: e.data });
+      for (const e of await readZip(new Uint8Array(await file.arrayBuffer()))) out.push({ path: `${path}/${e.path}`, data: e.data });
     } else if (/\.exe$/i.test(path)) {
-      for (const e of await readInno(file)) out.push({ path: `${path}/${e.path}`, data: e.data });
+      try {
+        for (const e of await readInno(file)) out.push({ path: `${path}/${e.path}`, data: e.data });
+      } catch (error) {
+        if (!keepNonInstallers) throw error;
+        out.push({ path, data: new Uint8Array(await file.arrayBuffer()) });
+      }
     } else {
-      out.push({ path, data });
+      out.push({ path, data: new Uint8Array(await file.arrayBuffer()) });
     }
   }
   return out;

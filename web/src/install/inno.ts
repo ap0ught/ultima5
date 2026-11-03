@@ -16,6 +16,7 @@ type InnoModule = {
 type TreeNode = { fileId?: number; nodes?: TreeNode[] };
 
 let ready: Promise<InnoModule> | undefined;
+let extractionQueue: Promise<void> = Promise.resolve();
 
 function module(): Promise<InnoModule> {
   if (!ready) {
@@ -50,44 +51,48 @@ function fileIds(nodes: TreeNode[]): number[] {
 
 /** Extract an Inno Setup installer to the same candidates used by ZIP uploads. */
 export async function readInno(file: File): Promise<ZipEntry[]> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const blob = new Blob([bytes as BlobPart]);
-  const input = { name: file.name, size: bytes.length, slice: (start: number, end: number) => blob.slice(start, end) };
-  (globalThis as typeof globalThis & { global_file_list?: unknown[] }).global_file_list = [input];
+  const result = extractionQueue.then(async () => {
+    (globalThis as typeof globalThis & { global_file_list?: unknown[] }).global_file_list = [file];
 
-  const inno = await module();
-  const chunks: Uint8Array[] = [];
-  const writer = {
-    ready: Promise.resolve(),
-    write: async (chunk: Uint8Array): Promise<void> => {
-      chunks.push(new Uint8Array(chunk));
-    },
-    close: () => undefined,
-  };
-  inno.writer = writer;
-  inno.set_options(
-    JSON.stringify({
-      enableDebug: false,
-      excludeTemps: true,
-      logsToFile: false,
-      extractionLanguageFilterOptions: 'all',
-      collisionResolutionOptions: 'overwrite',
-    }),
+    const inno = await module();
+    const chunks: Uint8Array[] = [];
+    const writer = {
+      ready: Promise.resolve(),
+      write: async (chunk: Uint8Array): Promise<void> => {
+        chunks.push(new Uint8Array(chunk));
+      },
+      close: () => undefined,
+    };
+    inno.writer = writer;
+    inno.set_options(
+      JSON.stringify({
+        enableDebug: false,
+        excludeTemps: true,
+        logsToFile: false,
+        extractionLanguageFilterOptions: 'all',
+        collisionResolutionOptions: 'overwrite',
+      }),
+    );
+
+    const loaded = parseResult<{ error?: string }>(await inno.load_exe(file.name));
+    if (loaded.error) throw new Error(loaded.error);
+    const tree = parseResult<TreeNode[]>(await inno.list_files());
+    const result = parseResult<{ error?: string }>(await inno.extract(JSON.stringify({ files: fileIds(tree), dirs: [] })));
+    if (result.error) throw new Error(result.error);
+    writer.close();
+
+    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const zip = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      zip.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return readZip(zip);
+  });
+  extractionQueue = result.then(
+    () => undefined,
+    () => undefined,
   );
-
-  const loaded = parseResult<{ error?: string }>(await inno.load_exe(file.name));
-  if (loaded.error) throw new Error(loaded.error);
-  const tree = parseResult<TreeNode[]>(await inno.list_files());
-  const result = parseResult<{ error?: string }>(await inno.extract(JSON.stringify({ files: fileIds(tree), dirs: [] })));
-  if (result.error) throw new Error(result.error);
-  writer.close();
-
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const zip = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    zip.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return readZip(zip);
+  return result;
 }
