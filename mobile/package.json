@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@capacitor/android": "^8",
-    "@capacitor/app": "^7.1.2",
+    "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8"
   },
   "devDependencies": {
