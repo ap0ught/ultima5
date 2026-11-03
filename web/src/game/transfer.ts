@@ -38,6 +38,10 @@ export interface Transfer {
    * or null when they chose no place for it. Absent where no file can be written.
    */
   save?: ((text: string, name: string) => Promise<string | null>) | undefined;
+  /** Desktop JSON files already in Downloads/Ultima5, for a controller-friendly in-game chooser. */
+  list?: (() => Promise<string[]>) | undefined;
+  /** Read one file returned by list. */
+  read?: ((name: string) => Promise<string>) | undefined;
   /** A file the player picks, read; '' when they pick none. */
   open(): Promise<string>;
 }
@@ -195,7 +199,19 @@ export async function importGame(g: Game): Promise<boolean> {
     }
   } else if (from === 1) {
     try {
-      text = (await t.open()).trim();
+      if (t.list && t.read) {
+        const files = await t.list();
+        if (!files.length) {
+          await say(g, 'Import', 'There are no JSON files in Downloads/Ultima5.');
+          return false;
+        }
+        const picked = await choose(g, 'Import which file?', files.map((name) => ({ label: name })), files.length - 1, true);
+        if (picked < 0) return false;
+        text = await t.read(files[picked]);
+      } else {
+        text = await t.open();
+      }
+      text = text.trim();
     } catch {
       await say(g, 'Import', 'The file could not be read.');
       return false;

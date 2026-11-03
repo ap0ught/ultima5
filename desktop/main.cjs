@@ -16,10 +16,10 @@
 // (updates.cjs). The Windows portable .exe keeps its data in a folder beside it (portable.cjs).
 const electron = require('electron');
 const { app, BrowserWindow, protocol, net, shell, session, ipcMain } = electron;
-const { join, normalize } = require('node:path');
+const { join, normalize, basename } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { homedir } = require('node:os');
-const { writeFileSync, existsSync } = require('node:fs');
+const { writeFileSync, existsSync, readdirSync, readFileSync, mkdirSync, openSync, closeSync, unlinkSync } = require('node:fs');
 const { scanForGameFiles } = require('./scan.cjs');
 const { readState, startsFullScreen, writeState } = require('./windowState.cjs');
 const {
@@ -58,6 +58,29 @@ const SCHEME = 'app';
 const HOST = 'ultima5';
 /** How long a quit waits for the Flatpak's update to finish coming down (holdForUpdate). */
 const UPDATE_HOLD_MS = 60_000;
+/** The desktop app's save/import folder inside the user's Downloads directory. */
+const exportDir = () => {
+  const dir = join(app.getPath('downloads'), 'Ultima5');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+};
+const reservedExports = new Set();
+function reserveExportName(name) {
+  if (typeof name !== 'string' || basename(name) !== name || !/\.json$/i.test(name)) return null;
+  const ext = name.slice(-5);
+  const stem = name.slice(0, -5);
+  for (let suffix = 0; suffix < 100_000; suffix++) {
+    const candidate = suffix ? `${stem} (${suffix})${ext}` : name;
+    try {
+      closeSync(openSync(join(exportDir(), candidate), 'wx'));
+      reservedExports.add(candidate);
+      return candidate;
+    } catch (e) {
+      if ((e).code !== 'EEXIST') throw e;
+    }
+  }
+  throw new Error('No unused export filename is available');
+}
 
 protocol.registerSchemesAsPrivileged([
   { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
@@ -169,6 +192,24 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
     callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write'),
   );
+  // Downloads are exports too: save them directly to Downloads/Ultima5 instead of opening Electron's native save dialog,
+  // which is outside the game's gamepad-controlled input path.
+  session.defaultSession.on('will-download', (_event, item) => {
+    const name = reservedExports.has(item.getFilename()) ? item.getFilename() : reserveExportName(item.getFilename());
+    if (!name) return;
+    const path = join(exportDir(), name);
+    item.setSavePath(path);
+    item.once('done', (_downloadEvent, state) => {
+      reservedExports.delete(name);
+      if (state !== 'completed') {
+        try {
+          unlinkSync(path);
+        } catch {
+          /* already removed */
+        }
+      }
+    });
+  });
   // The installer's Scan for game files... (preload.cjs): the copies scan.cjs finds, only the files the page names.
   // Only the game's own page (the app:// scheme) may ask; a frame from anywhere else is answered with no copies.
   ipcMain.handle('scan-game-files', (event, names) =>
@@ -187,6 +228,7 @@ app.whenReady().then(() => {
   // A newer version (updates.cjs), for the game to say in its own way (preload.cjs u5native.updates): the offer, taking
   // it up, the player told of it. Only the game's own page may ask.
   const fromGame = (event) => String(event.senderFrame?.url ?? '').startsWith('app://');
+  ipcMain.handle('reserve-export-file', (event, name) => (fromGame(event) ? reserveExportName(name) : null));
   const updatesFile = join(app.getPath('userData'), 'updates.json');
   ipcMain.handle('update-offer', (event) => (fromGame(event) ? currentOffer() : null));
   ipcMain.handle('update-apply', (event) => fromGame(event) && applyUpdate({ electron }));
@@ -198,6 +240,25 @@ app.whenReady().then(() => {
   ipcMain.handle('update-notes', (event, version) =>
     fromGame(event) && typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version) ? releaseNotes({ net, version }) : null,
   );
+  const downloadFiles = () => {
+    try {
+      return readdirSync(exportDir(), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /\.json$/i.test(entry.name) && !reservedExports.has(entry.name))
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
+  };
+  ipcMain.handle('list-import-files', (event) => (fromGame(event) ? downloadFiles() : []));
+  ipcMain.handle('read-import-file', (event, name) => {
+    if (!fromGame(event) || typeof name !== 'string' || basename(name) !== name || !/\.json$/i.test(name)) return null;
+    try {
+      return readFileSync(join(exportDir(), name), 'utf8');
+    } catch {
+      return null;
+    }
+  });
   const win = createWindow();
   onOffer((o) => {
     if (!win.isDestroyed()) win.webContents.send('update-offer-changed', o);

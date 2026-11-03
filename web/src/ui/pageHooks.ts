@@ -185,16 +185,19 @@ function pickFile(): Promise<string> {
 }
 
 /** `text` saved as a file named `name`, by the browser's download. */
-function saveFile(text: string, name: string): Promise<string> {
+async function saveFile(text: string, name: string): Promise<string> {
+  const native = (window as { u5native?: { exports?: { reserve: (name: string) => Promise<string | null> } } }).u5native?.exports;
+  const actualName = native ? await native.reserve(name) : name;
+  if (!actualName) throw new Error('No unused export filename is available');
   const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = name;
+  a.download = actualName;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  return Promise.resolve(name);
+  return actualName;
 }
 
 /** The Android app's GameFolder plugin, its half for Export (mobile/.../GameFolderPlugin.java saveFile). */
@@ -222,6 +225,9 @@ export const BATTERY_SAVER_REST_MS = 60_000;
 
 export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElement, tiles: Uint8Array, sound: PcSound): void {
   const native = Boolean((window as { Capacitor?: CapacitorLike }).Capacitor?.isNativePlatform?.());
+  const desktopFiles = (window as {
+    u5native?: { importFiles?: { list: () => Promise<string[]>; read: (name: string) => Promise<string | null> } };
+  }).u5native?.importFiles;
   const scanlines = new ScanlineOverlay(canvas);
   // A tab nobody is looking at holds where it is, music and all, and takes up again when it comes back - unless
   // the pause menu is up, whose own hold outlives the window's return (the u3 port's two holds).
@@ -327,6 +333,14 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       // without that offers the clipboard only.
       save: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
       // A file input works in the Android app as in a browser: Capacitor's web view opens the system's picker for it.
+      list: desktopFiles?.list,
+      read: desktopFiles
+        ? async (name) => {
+            const text = await desktopFiles.read(name);
+            if (text === null) throw new Error('file disappeared');
+            return text;
+          }
+        : undefined,
       open: pickFile,
     },
     async uninstall() {
