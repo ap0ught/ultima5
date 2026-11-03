@@ -70,13 +70,20 @@ async function fromFiles(list: File[]): Promise<Candidate[]> {
 async function expand(files: { path: string; file: File }[]): Promise<Candidate[]> {
   const out: Candidate[] = [];
   for (const { path, file } of files) {
-    const data = new Uint8Array(await file.arrayBuffer());
     if (/\.zip$/i.test(path)) {
+      const data = new Uint8Array(await file.arrayBuffer());
       for (const e of await readZip(data)) out.push({ path: `${path}/${e.path}`, data: e.data });
     } else if (/\.exe$/i.test(path)) {
-      for (const e of await readInno(file)) out.push({ path: `${path}/${e.path}`, data: e.data });
+      try {
+        for (const e of await readInno(file)) out.push({ path: `${path}/${e.path}`, data: e.data });
+      } catch (e) {
+        // An installed game folder can contain ordinary DOS executables. Only a
+        // standalone .exe selection is required to be an Inno Setup installer.
+        if (files.length === 1 && path === file.name) throw e;
+        out.push({ path, data: new Uint8Array(await file.arrayBuffer()) });
+      }
     } else {
-      out.push({ path, data });
+      out.push({ path, data: new Uint8Array(await file.arrayBuffer()) });
     }
   }
   return out;
