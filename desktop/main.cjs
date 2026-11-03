@@ -16,10 +16,10 @@
 // (updates.cjs). The Windows portable .exe keeps its data in a folder beside it (portable.cjs).
 const electron = require('electron');
 const { app, BrowserWindow, protocol, net, shell, session, ipcMain } = electron;
-const { join, normalize } = require('node:path');
+const { join, normalize, basename } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { homedir } = require('node:os');
-const { writeFileSync, existsSync } = require('node:fs');
+const { writeFileSync, existsSync, readdirSync, readFileSync, mkdirSync } = require('node:fs');
 const { scanForGameFiles } = require('./scan.cjs');
 const { readState, startsFullScreen, writeState } = require('./windowState.cjs');
 const {
@@ -58,6 +58,12 @@ const SCHEME = 'app';
 const HOST = 'ultima5';
 /** How long a quit waits for the Flatpak's update to finish coming down (holdForUpdate). */
 const UPDATE_HOLD_MS = 60_000;
+/** The desktop app's save/import folder inside the user's Downloads directory. */
+const exportDir = () => {
+  const dir = join(app.getPath('downloads'), 'Ultima5');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+};
 
 protocol.registerSchemesAsPrivileged([
   { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
@@ -169,10 +175,10 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
     callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write'),
   );
-  // Downloads are exports too: save them directly to the normal Downloads folder instead of opening Electron's native
-  // save dialog, which is outside the game's gamepad-controlled input path.
+  // Downloads are exports too: save them directly to Downloads/Ultima5 instead of opening Electron's native save dialog,
+  // which is outside the game's gamepad-controlled input path.
   session.defaultSession.on('will-download', (_event, item) => {
-    item.setSavePath(join(app.getPath('downloads'), item.getFilename()));
+    item.setSavePath(join(exportDir(), item.getFilename()));
   });
   // The installer's Scan for game files... (preload.cjs): the copies scan.cjs finds, only the files the page names.
   // Only the game's own page (the app:// scheme) may ask; a frame from anywhere else is answered with no copies.
@@ -203,6 +209,25 @@ app.whenReady().then(() => {
   ipcMain.handle('update-notes', (event, version) =>
     fromGame(event) && typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version) ? releaseNotes({ net, version }) : null,
   );
+  const downloadFiles = () => {
+    try {
+      return readdirSync(exportDir(), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && /\.json$/i.test(entry.name))
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
+  };
+  ipcMain.handle('list-import-files', (event) => (fromGame(event) ? downloadFiles() : []));
+  ipcMain.handle('read-import-file', (event, name) => {
+    if (!fromGame(event) || typeof name !== 'string' || basename(name) !== name || !/\.json$/i.test(name)) return null;
+    try {
+      return readFileSync(join(exportDir(), name), 'utf8');
+    } catch {
+      return null;
+    }
+  });
   const win = createWindow();
   onOffer((o) => {
     if (!win.isDestroyed()) win.webContents.send('update-offer-changed', o);
