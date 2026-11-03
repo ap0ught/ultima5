@@ -2,6 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { K, TURN_LEFT } from '../src/game/io.ts';
 import { GamepadInput } from '../src/ui/gamepad.ts';
 
+/** An indexed collection without array methods, as an older WebView may return. */
+function indexed<T>(values: T[]): { length: number; [index: number]: T } {
+  const result = { length: values.length } as { length: number; [index: number]: T };
+  for (let i = 0; i < values.length; i++) result[i] = values[i];
+  return result;
+}
+
 /** A pad as the Gamepad API reports it: its mapping, its axes, no button pressed. */
 const padOf = (mapping: string, axes: number[]) => ({
   connected: true,
@@ -94,5 +101,45 @@ describe('a gamepad read lazily', () => {
     );
     for (let i = 0; i < 3; i++) f.next();
     expect(f.queued).toBe(1);
+  });
+
+  it('reads an indexed pad list and array-like buttons and axes', () => {
+    const f = frames();
+    const makePad = (connected: boolean) => ({
+      connected,
+      mapping: 'standard',
+      axes: indexed([0, 0]),
+      buttons: indexed(Array.from({ length: 17 }, () => ({ pressed: false }))),
+    });
+    const connected = makePad(true);
+    const disconnected = makePad(false);
+    let pads = indexed([null, disconnected]);
+    vi.stubGlobal('navigator', { getGamepads: () => pads });
+    const sent: number[] = [];
+    const input = new GamepadInput((code) => sent.push(code), () => true);
+
+    f.next();
+    expect(f.queued).toBe(0);
+    pads = indexed([null, disconnected, connected]);
+    input.wake();
+    f.next();
+    expect(f.queued).toBe(1);
+    connected.axes[1] = 0.9;
+    connected.buttons[0].pressed = true;
+    f.next();
+    expect(sent).toEqual([0x100, K.Down]);
+    pads = indexed([]);
+    f.next();
+    expect(f.queued).toBe(0);
+  });
+
+  it('stays idle when the browser has no Gamepad API', () => {
+    const f = frames();
+    vi.stubGlobal('navigator', {});
+    new GamepadInput(() => undefined, () => true);
+
+    f.next();
+
+    expect(f.queued).toBe(0);
   });
 });
