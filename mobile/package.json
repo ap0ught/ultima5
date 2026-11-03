@@ -13,6 +13,6 @@
     "@capacitor/core": "^8"
   },
   "devDependencies": {
-    "@capacitor/cli": "^7"
+    "@capacitor/cli": "^8"
   }
 }
