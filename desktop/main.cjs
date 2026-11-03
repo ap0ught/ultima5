@@ -169,6 +169,11 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
     callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write'),
   );
+  // Downloads are exports too: save them directly to the normal Downloads folder instead of opening Electron's native
+  // save dialog, which is outside the game's gamepad-controlled input path.
+  session.defaultSession.on('will-download', (_event, item) => {
+    item.setSavePath(join(app.getPath('downloads'), item.getFilename()));
+  });
   // The installer's Scan for game files... (preload.cjs): the copies scan.cjs finds, only the files the page names.
   // Only the game's own page (the app:// scheme) may ask; a frame from anywhere else is answered with no copies.
   ipcMain.handle('scan-game-files', (event, names) =>
