@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { K, TURN_LEFT } from '../src/game/io.ts';
 import { GamepadInput } from '../src/ui/gamepad.ts';
 
@@ -24,7 +24,11 @@ function sent(mapping: string, at: (ms: number) => number[]): number[] {
   return out;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 /**
  * A stick's axis is read once it has been seen at rest (gamepad.ts): a pad whose trigger rests at -1 as an axis, or
@@ -83,6 +87,23 @@ describe('a gamepad read lazily', () => {
     pads = [];
     f.next();
     expect(f.queued).toBe(0); // unplugged: reading stops
+  });
+
+  it('probes for a pad connected after the idle read stopped', () => {
+    const f = frames();
+    let pads: ReturnType<typeof padOf>[] = [];
+    vi.stubGlobal('navigator', { getGamepads: () => pads });
+    new GamepadInput(
+      () => undefined,
+      () => true,
+    );
+    f.next(); // the first read, finding none
+    expect(f.queued).toBe(0);
+    pads = [padOf('standard', [0, 0, 0, 0])];
+    vi.advanceTimersByTime(1000); // the connection event was missed
+    expect(f.queued).toBe(1);
+    f.next();
+    expect(f.queued).toBe(1); // connected: normal refresh polling resumes
   });
 
   it('reads at every refresh, pad or none, where it is not lazy', () => {
