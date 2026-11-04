@@ -88,6 +88,30 @@ describe('exporting a game', () => {
     expect(file.saved[0][1]).toMatch(/^ultima5-([A-Za-z0-9]+-)?\d{8}-\d{4}\.json$/);
   });
 
+  it('exports the same game as JSON or PNG when the player chooses the destination and format', async () => {
+    const saved = JSON.stringify(serialize(newGame().g));
+    store.set(SAVE_KEY, saved);
+    const json = page();
+    await exportGame(title(json, K.Down, K.Enter, K.Enter).g);
+    expect(json.saved).toHaveLength(1);
+    expect(json.saved[0][0]).toBe(saved);
+    expect(json.saved[0][1]).toMatch(/\.json$/);
+
+    const png: { text: string; name: string }[] = [];
+    const image = page({ saveImage: async (text, name) => (png.push({ text, name }), name) });
+    await exportGame(title(image, K.Down, K.Enter, K.Down, K.Enter).g);
+    expect(png).toEqual([{ text: saved, name: expect.stringMatching(/\.png$/) }]);
+  });
+
+  it('copies the selected PNG representation to the clipboard', async () => {
+    const saved = JSON.stringify(serialize(newGame().g));
+    store.set(SAVE_KEY, saved);
+    const png: string[] = [];
+    const clip = page({ copyImage: async (text) => void png.push(text) });
+    await exportGame(title(clip, K.Enter, K.Down, K.Enter).g);
+    expect(clip.copied).toHaveLength(0);
+    expect(png).toEqual([saved]);
+  });
   it('says nothing more where the player chose no place for the file, and tells the name they chose where they did', async () => {
     store.set(SAVE_KEY, JSON.stringify(serialize(newGame().g)));
     const none = title(page({ save: async () => null }), K.Down, K.Enter);
