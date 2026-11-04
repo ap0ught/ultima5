@@ -323,7 +323,7 @@ export async function importGame(g: Game): Promise<boolean> {
           await say(g, 'Import', 'There are no JSON or PNG files in Downloads/Ultima5.');
           return false;
         }
-        const picked = await choose(g, 'Import which file?', files.map((name) => ({ label: importFileLabel(name) })), files.length - 1, true, undefined, 50);
+        const picked = await choose(g, 'Import which file?', files.map((name) => ({ label: importFileLabel(name) })), files.length - 1, true, undefined, 38);
         if (picked < 0) return false;
         text = readImportFile(await t.read(files[picked]));
       } else {

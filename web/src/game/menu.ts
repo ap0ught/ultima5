@@ -171,13 +171,13 @@ let cols = WIDTH;
  * with two or three answers should not blot out the whole view (the
  * ultima3 port's placed windows). The text window is left selected.
  */
-export function box(g: Game, title: string, width: number, rows: number): void {
+export function box(g: Game, title: string, width: number, rows: number, maxWidth = WIDTH): void {
   const d = g.draw;
   const t = g.text;
-  cols = Math.max(6, Math.min(WIDTH, width));
+  cols = Math.max(6, Math.min(!g.inPlay ? maxWidth : WIDTH, width));
   const head = title ? 2 : 0; // a box with no title is its answers and nothing else
   if (!g.inPlay && !titlePanel) {
-    framedBox(g, title, width, rows);
+    framedBox(g, title, width, rows, maxWidth);
     return;
   }
   // In the map's square (at the title, the one Settings is centred in), as in play.
@@ -211,9 +211,9 @@ export function box(g: Game, title: string, width: number, rows: number): void {
  * text window is left selected. (box does this at the title; a screen in play that wants the title's arrangement, the
  * Appearance screen, asks for it.)
  */
-export function framedBox(g: Game, title: string, width: number, rows: number): void {
+export function framedBox(g: Game, title: string, width: number, rows: number, maxWidth = WIDTH): void {
   const t = g.text;
-  cols = Math.max(6, Math.min(WIDTH, width));
+  cols = Math.max(6, Math.min(maxWidth, width));
   const head = title ? 2 : 0;
   const tall = rows + head + 2;
   const [left, top] = [(40 - cols) >> 1, 1 + (tall <= TITLE_ABOVE ? (TITLE_ABOVE - tall) >> 1 : Math.max(0, (25 - tall) >> 1))];
@@ -726,12 +726,7 @@ export async function choose(g: Game, title: string, items: Item[], start = 0, b
   const lettered = g.options.input === 'letters' && items.some((it) => it.key);
   const frame = (): void => {
     if (boxed)
-      box(
-        g,
-        title,
-        boxNotes ? WIDTH : Math.min(WIDTH, Math.max(boxWidth ?? 0, title.length, ...items.map((it) => it.label.length + (lettered ? 2 : 0))) + 1),
-        rows + (boxNotes ? boxNotes + 1 : 0),
-      );
+      box(g, title, boxNotes ? WIDTH : Math.min(boxWidth ?? WIDTH, Math.max(title.length, ...items.map((it) => it.label.length + (lettered ? 2 : 0))) + 1), rows + (boxNotes ? boxNotes + 1 : 0), boxWidth);
     // (Two columns more where it scrolls, for the arrows that say there are more lines above or below: drawTalkMarks.)
     else if (talking)
       talkBox(g, Math.max(...items.map((it) => it.label.length + (lettered ? 2 : 0))) + 1 + (items.length > rows ? 2 : 0), rows, talk);
