@@ -68,6 +68,16 @@ describe('the aiming mark', () => {
     expect(marks((g) => (g.healPick = 1))).toEqual([[4, 8, 'heal']]);
   });
 
+  it('ignores a stale player combatant whose member index is no longer valid', () => {
+    const { g, p } = newGame();
+    g.s.mapId = 0xff;
+    g.options.tileSet = 'standard';
+    Object.assign(g.combat[0], { who: g.s.members.length, x: 5, y: 7, flags: CF.Player });
+    Object.assign(g.s, { combatTurn: 0, crosshair: 0 });
+    p.draw.marker = () => {};
+    expect(() => drawCombatMarks(g)).not.toThrow();
+  });
+
   it('marks whoever acts while a direction is asked, in a fight and in a town', () => {
     expect(marks((g) => (g.directing = true))).toEqual([[5, 7, 'direction']]);
     const { g, p } = newGame();
@@ -80,6 +90,7 @@ describe('the aiming mark', () => {
     expect(drawn).toEqual([[5, 5, 'direction']]); // the party, in the middle of the view
   });
 });
+
 
 /** The turn's outline on the combat map (the Standard look): the colour of the member's bar in the party panel. */
 describe('the turn marker', () => {
