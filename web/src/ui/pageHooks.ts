@@ -187,12 +187,12 @@ function pickFile(): Promise<string> {
 }
 
 /** `text` saved as a file named `name`, by the browser's download. */
-async function saveFile(text: string, name: string): Promise<string> {
+async function saveFile(contents: string | Blob, name: string): Promise<string> {
   const native = (window as { u5native?: { exports?: { reserve: (name: string) => Promise<string | null> } } }).u5native?.exports;
   const actualName = native ? await native.reserve(name) : name;
   if (!actualName) throw new Error('No unused export filename is available');
-  const type = name.endsWith('.svg') ? 'image/svg+xml' : 'application/json';
-  const url = URL.createObjectURL(new Blob([text], { type }));
+  const type = name.endsWith('.png') ? 'image/png' : name.endsWith('.svg') ? 'image/svg+xml' : 'application/json';
+  const url = URL.createObjectURL(contents instanceof Blob ? contents : new Blob([contents], { type }));
   const a = document.createElement('a');
   a.href = url;
   a.download = actualName;
@@ -203,8 +203,44 @@ async function saveFile(text: string, name: string): Promise<string> {
   return actualName;
 }
 
-/** Render the active party with the engine's StandardArt figures into a portable SVG card. */
-async function engineCharacterImage(g: Game, screen: Screen, text: string): Promise<string> {
+function pngCrc(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** Add an uncompressed UTF-8 iTXt chunk after IHDR so the PNG remains a normal viewable image. */
+async function pngWithSave(pngUrl: string, text: string): Promise<Blob> {
+  const source = new Uint8Array(await (await fetch(pngUrl)).arrayBuffer());
+  const encoder = new TextEncoder();
+  const keyword = encoder.encode('Ultima5Save');
+  const payload = new Uint8Array(keyword.length + 5 + encoder.encode(text).length);
+  payload.set(keyword, 0);
+  payload[keyword.length] = 0; // keyword terminator
+  payload[keyword.length + 1] = 0; // uncompressed
+  payload[keyword.length + 2] = 0; // compression method
+  payload[keyword.length + 3] = 0; // language tag terminator
+  payload[keyword.length + 4] = 0; // translated keyword terminator
+  payload.set(encoder.encode(text), keyword.length + 5);
+  const type = encoder.encode('iTXt');
+  const chunk = new Uint8Array(12 + payload.length);
+  new DataView(chunk.buffer).setUint32(0, payload.length);
+  chunk.set(type, 4);
+  chunk.set(payload, 8);
+  new DataView(chunk.buffer).setUint32(8 + payload.length, pngCrc(new Uint8Array(chunk.buffer, 4, 4 + payload.length)));
+  // PNG signature (8) + IHDR (4 length, 4 type, 13 data, 4 CRC).
+  const out = new Uint8Array(source.length + chunk.length);
+  out.set(source.subarray(0, 33), 0);
+  out.set(chunk, 33);
+  out.set(source.subarray(33), 33 + chunk.length);
+  return new Blob([out], { type: 'image/png' });
+}
+
+/** Render the active party with the engine's StandardArt figures into a portable PNG. */
+async function engineCharacterImage(g: Game, screen: Screen, text: string): Promise<Blob> {
   const art = screen.characterArt;
   if (!art) throw new Error('Character image export requires the game character art to be loaded');
   const save = parseSave(text);
@@ -247,8 +283,7 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
   const savedAt = new Date(save.written).toLocaleString();
   ctx.fillText(`Saved ${savedAt}`, 400, 560);
   const png = card.toDataURL('image/png');
-  const encoded = btoa(unescape(encodeURIComponent(text)));
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><metadata id="ultima5-save" data-format="ultima5-json-base64">${encoded}</metadata><image href="${png}" width="800" height="600"/></svg>`;
+  return pngWithSave(png, text);
 }
 
 /** The Android app's GameFolder plugin, its half for Export (mobile/.../GameFolderPlugin.java saveFile). */
@@ -385,8 +420,7 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       save: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
       saveImage: async (text, name) => {
         const image = await engineCharacterImage(g, screen, text);
-        const save = native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile;
-        return save ? save(image, name) : null;
+        return native ? null : saveFile(image, name);
       },
       // A file input works in the Android app as in a browser: Capacitor's web view opens the system's picker for it.
       list: desktopFiles?.list,

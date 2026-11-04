@@ -39,8 +39,8 @@ export interface Transfer {
    * or null when they chose no place for it. Absent where no file can be written.
    */
   save?: ((text: string, name: string) => Promise<string | null>) | undefined;
-  /** Saved character card image, with the save embedded in its SVG metadata. */
-  saveImage?: ((image: string, name: string) => Promise<string | null>) | undefined;
+  /** Saved character group image, with the save embedded in its PNG metadata. */
+  saveImage?: ((text: string, name: string) => Promise<string | null>) | undefined;
   /** Desktop JSON files already in Downloads/Ultima5, for a controller-friendly in-game chooser. */
   list?: (() => Promise<string[]>) | undefined;
   /** Read one file returned by list. */
@@ -192,7 +192,7 @@ export async function exportGame(g: Game): Promise<void> {
     }
   } else if (where === (t.save ? 2 : 1) && t.saveImage) {
     try {
-      const name = await t.saveImage(text, fileName.replace(/\.json$/, '.svg'));
+      const name = await t.saveImage(text, fileName.replace(/\.json$/, '.png'));
       if (name !== null) await say(g, 'Export', `The character image is saved as ${name}.`);
     } catch {
       await say(g, 'Export', 'The character image could not be saved here.');
