@@ -212,7 +212,14 @@ function pickFile(): Promise<string> {
 
 /** `text` saved as a file named `name`, by the browser's download. */
 async function saveFile(contents: string | Blob, name: string): Promise<string> {
-  const native = (window as { u5native?: { exports?: { reserve: (name: string) => Promise<string | null> } } }).u5native?.exports;
+  const native = (window as { u5native?: { exports?: { reserve: (name: string) => Promise<string | null>; write?: (name: string, bytes: ArrayBuffer) => Promise<string | null> } } }).u5native?.exports;
+  if (native?.write && contents instanceof Blob) {
+    const actualName = await native.reserve(name);
+    if (!actualName) throw new Error('No unused export filename is available');
+    const saved = await native.write(actualName, await contents.arrayBuffer());
+    if (!saved) throw new Error('The image could not be written');
+    return saved;
+  }
   const actualName = native ? await native.reserve(name) : name;
   if (!actualName) throw new Error('No unused export filename is available');
   const type = name.endsWith('.png') ? 'image/png' : name.endsWith('.svg') ? 'image/svg+xml' : 'application/json';

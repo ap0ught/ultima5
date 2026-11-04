@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('u5native', {
   },
   exports: {
     reserve: (name) => ipcRenderer.invoke('reserve-export-file', name),
+    write: (name, bytes) => ipcRenderer.invoke('write-export-file', name, bytes),
   },
   // A newer version (updates.cjs; web/src/ui/updates.ts): what it is, taking it up, the player told of it.
   updates: {

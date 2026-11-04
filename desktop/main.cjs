@@ -230,6 +230,13 @@ app.whenReady().then(() => {
   // it up, the player told of it. Only the game's own page may ask.
   const fromGame = (event) => String(event.senderFrame?.url ?? '').startsWith('app://');
   ipcMain.handle('reserve-export-file', (event, name) => (fromGame(event) ? reserveExportName(name) : null));
+  ipcMain.handle('write-export-file', (event, name, bytes) => {
+    if (!fromGame(event) || typeof name !== 'string' || !reservedExports.has(name)) return null;
+    if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) return null;
+    writeFileSync(join(exportDir(), name), Buffer.from(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes));
+    reservedExports.delete(name);
+    return name;
+  });
   const updatesFile = join(app.getPath('userData'), 'updates.json');
   ipcMain.handle('update-offer', (event) => (fromGame(event) ? currentOffer() : null));
   ipcMain.handle('update-apply', (event) => fromGame(event) && applyUpdate({ electron }));
