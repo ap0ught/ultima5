@@ -699,7 +699,7 @@ function scrollMarks(g: Game, rows: number, above: boolean, below: boolean): voi
 /** What choose returns where the opener's key hook (Game.choiceKey) left the list, to show something over it. */
 export const LEFT_FOR_HOOK = -3;
 
-export async function choose(g: Game, title: string, items: Item[], start = 0, boxed = false, talkRows?: TalkRows): Promise<number> {
+export async function choose(g: Game, title: string, items: Item[], start = 0, boxed = false, talkRows?: TalkRows, boxWidth?: number): Promise<number> {
   // What was said for the Dialog setting's box shown first: the box drawn before the menu, not over it - and a list
   // low in the view, as a townsman's talk has it, the merchant's words in sight above it (merchantSpeech.ts).
   if (g.beforeRead) await g.beforeRead();
@@ -729,7 +729,7 @@ export async function choose(g: Game, title: string, items: Item[], start = 0, b
       box(
         g,
         title,
-        boxNotes ? WIDTH : Math.max(title.length, ...items.map((it) => it.label.length + (lettered ? 2 : 0))) + 1,
+        boxNotes ? WIDTH : Math.min(WIDTH, Math.max(boxWidth ?? 0, title.length, ...items.map((it) => it.label.length + (lettered ? 2 : 0))) + 1),
         rows + (boxNotes ? boxNotes + 1 : 0),
       );
     // (Two columns more where it scrolls, for the arrows that say there are more lines above or below: drawTalkMarks.)
