@@ -30,6 +30,8 @@ import {
 export interface Transfer {
   /** Onto the clipboard. */
   copy(text: string): Promise<void>;
+  /** Copy a rendered character PNG to the clipboard. */
+  copyImage?: ((text: string) => Promise<void>) | undefined;
   /** Off the clipboard. */
   paste(): Promise<string>;
   /** The page's own box to paste into, where the clipboard cannot be read: its text, or null. */
@@ -165,38 +167,49 @@ export async function exportGame(g: Game): Promise<void> {
   const text = exportText(g, id);
   if (!text) return say(g, 'Export', 'There is no saved game to export.');
   const fileName = exportName(new Date(), avatarName(parseSave(text)));
-  const where = await choose(
+  const destination = await choose(
     g,
-    'Export',
+    'Export where?',
     [
-      { label: 'To the clipboard', note: 'To paste into Import on another browser or device.' },
-      ...(t.save ? [{ label: 'To a file', note: `Saved as ${fileName}.` }] : []),
-      ...(t.saveImage ? [{ label: 'As a character image', note: 'A group-shot PNG with the save embedded in its metadata.' }] : []),
+      ...(t.copyImage ? [{ label: 'To the clipboard', note: 'Copy a save or character image.' }] : [{ label: 'To the clipboard', note: 'Copy the save JSON.' }]),
+      ...(t.save ? [{ label: 'To a file', note: `Save in JSON or PNG format.` }] : []),
     ],
     0,
     true,
   );
-  if (where === 0) {
+  if (destination < 0) return;
+  const imageAvailable = destination === 0 ? Boolean(t.copyImage) : Boolean(t.saveImage);
+  const formatChoices = [
+    { label: 'The saved game (JSON)', note: 'Portable save data for importing.' },
+    ...(imageAvailable ? [{ label: 'The character image (PNG)', note: 'Group shot with the complete save embedded.' }] : []),
+  ];
+  const format = await choose(g, 'Export what?', formatChoices, 0, true);
+  if (format < 0) return;
+  const image = format === 1;
+  if (!image) {
     try {
-      await t.copy(text);
-      await say(g, 'Export', 'The game is copied to the clipboard.');
+      if (destination === 0) {
+        await t.copy(text);
+        await say(g, 'Export', 'The saved game JSON is copied to the clipboard.');
+      } else if (t.save) {
+        const name = await t.save(text, fileName);
+        if (name !== null) await say(g, 'Export', `The saved game is saved as ${name}.`);
+      }
     } catch {
-      await say(g, 'Export', 'The clipboard is not available here.');
+      await say(g, 'Export', destination === 0 ? 'The clipboard is not available here.' : 'A file could not be saved here.');
     }
-  } else if (where === 1 && t.save) {
-    try {
-      const name = await t.save(text, fileName);
-      if (name !== null) await say(g, 'Export', `The game is saved as ${name}.`); // null: no place chosen
-    } catch {
-      await say(g, 'Export', 'A file could not be saved here.');
+    return;
+  }
+  try {
+    if (destination === 0 && t.copyImage) {
+      await t.copyImage(text);
+      await say(g, 'Export', 'The character PNG is copied to the clipboard.');
+    } else if (t.saveImage) {
+      const name = await t.saveImage(text, fileName.replace(/\\.json$/, '.png'));
+      if (name !== null) await say(g, 'Export', `The character PNG is saved as ${name}.`);
     }
-  } else if (where === (t.save ? 2 : 1) && t.saveImage) {
-    try {
-      const name = await t.saveImage(text, fileName.replace(/\.json$/, '.png'));
-      if (name !== null) await say(g, 'Export', `The character image is saved as ${name}.`);
-    } catch {
-      await say(g, 'Export', 'The character image could not be saved here.');
-    }
+  } catch {
+    await say(g, 'Export', destination === 0 ? 'The character PNG could not be copied here.' : 'The character PNG could not be saved here.');
   }
 }
 

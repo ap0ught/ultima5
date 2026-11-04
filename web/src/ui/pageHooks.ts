@@ -433,6 +433,11 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
     applyOptions: apply,
     transfer: {
       copy: (text) => navigator.clipboard.writeText(text),
+      copyImage: async (text) => {
+        const image = await engineCharacterImage(g, screen, text);
+        if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('Image clipboard is unavailable');
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': image })]);
+      },
       paste: () => navigator.clipboard.readText(),
       async pasteBox() {
         const r = await dialog('The clipboard cannot be read here. Paste the saved game below.', true, ['Cancel', 'Import']);
