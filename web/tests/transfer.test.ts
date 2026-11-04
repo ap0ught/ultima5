@@ -3,15 +3,17 @@ import { chooseCharacter } from '../src/game/characters.ts';
 import { K } from '../src/game/io';
 import { wrap } from '../src/game/menu';
 import { SAVE_KEY, saveKeys, serialize, unpackSave } from '../src/game/storage';
-import { asciiJson, characterImage, exportGame, exportName, exportText, importGame, mendImport, readPngSave, type Transfer, uniqueImportFiles } from '../src/game/transfer';
+import { asciiJson, characterImage, exportGame, exportName, exportText, importFileLabel, importGame, mendImport, readPngSave, type Transfer, uniqueImportFiles } from '../src/game/transfer';
 import { parseSave } from '../src/game/storage';
 import { newGame } from './helpers';
 
-/**
- * A game carried between browsers, devices and the apps (transfer.ts, the ultima3 port's Export and Import): out to
- * the clipboard or a file and back from either, chosen on the screen, and put in the saved game's place only when
- * the player says so.
- */
+describe('import file labels', () => {
+  it('keeps the name, timestamp, and format inside the picker label', () => {
+    expect(importFileLabel('ultima5-Jarek-20261104-0822.png')).toBe('Jarek · 2026-11-04 08:22 · PNG');
+    expect(importFileLabel('ultima5-20261104-0822.json')).toBe('Unnamed · 2026-11-04 08:22 · JSON');
+    expect(importFileLabel('ultima5-VeryLongCharacterName-20261104-0822.png')).toContain('2026-11-04 08:22');
+  });
+});
 
 /** The browser's local storage, in memory. */
 const store = new Map<string, string>();

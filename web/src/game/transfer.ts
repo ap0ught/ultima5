@@ -189,7 +189,15 @@ export function exportName(when = new Date(), who = ''): string {
   return `ultima5-${name ? `${name}-` : ''}${day}-${two(when.getHours())}${two(when.getMinutes())}.json`;
 }
 
-const xml = (value: string): string => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!);
+export function importFileLabel(fileName: string): string {
+  const match = /^ultima5-(?:(.*?)-)?([0-9]{8})-([0-9]{4})\.(json|png)$/i.exec(fileName);
+  if (!match) return fileName.length > 36 ? `${fileName.slice(0, 33)}...` : fileName;
+  const [, rawName = '', day, clock, extension] = match;
+  const name = rawName ? (rawName.length > 12 ? `${rawName.slice(0, 11)}…` : rawName) : 'Unnamed';
+  return `${name} · ${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6)} ${clock.slice(0, 2)}:${clock.slice(2)} · ${extension.toUpperCase()}`;
+}
+
+const xml = (value: string): string => value.replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', "'": '&apos;' })[c]!);
 const hex = (value: number): string => `#${value.toString(16).padStart(6, '0')}`;
 
 /** A portable character card: an SVG portrait and labels, with the complete JSON save in base64 metadata. */
@@ -315,7 +323,7 @@ export async function importGame(g: Game): Promise<boolean> {
           await say(g, 'Import', 'There are no JSON or PNG files in Downloads/Ultima5.');
           return false;
         }
-        const picked = await choose(g, 'Import which file?', files.map((name) => ({ label: name })), files.length - 1, true);
+        const picked = await choose(g, 'Import which file?', files.map((name) => ({ label: importFileLabel(name) })), files.length - 1, true);
         if (picked < 0) return false;
         text = readImportFile(await t.read(files[picked]));
       } else {
