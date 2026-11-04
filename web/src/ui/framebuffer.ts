@@ -149,6 +149,8 @@ export interface TileArt {
   draw(page: Uint32Array, tile: number, x: number, y: number, ground?: number, place?: Place, tint?: number, floor?: number): void;
   /** The party on foot as its members (a grid of four), where the art draws them so; see StandardArt.party. */
   party?(page: Uint32Array, figures: Figure[], x: number, y: number, terrain: number, floor?: number, place?: Place): void;
+  /** A complete figure tile for export, when this art set has a portable figure representation. */
+  figure?(tile: number): Uint32Array;
   /** The colour of one pixel of a tile at EGA resolution, as a block of HI by HI (for the reveal). */
   block(page: Uint32Array, tile: number, rx: number, ry: number, x: number, y: number): void;
   /**
@@ -2673,6 +2675,18 @@ export class TilesAlone implements TileArt {
 /** The Original tile art: the EGA tiles (as the animator has left them) enlarged. */
 export class EgaArt implements TileArt {
   constructor(private readonly tiles: Uint8Array) {}
+
+  figure(tile: number): Uint32Array {
+    const out = new Uint32Array(64 * 64);
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        const v = this.tiles[tile * 128 + y * 8 + (x >> 1)];
+        const colour = EGA_RGBA[x & 1 ? v & 15 : v >> 4];
+        for (let dy = 0; dy < 4; dy++) out.fill(colour, (y * 4 + dy) * 64 + x * 4, (y * 4 + dy) * 64 + x * 4 + 4);
+      }
+    }
+    return out;
+  }
 
   draw(page: Uint32Array, tile: number, x: number, y: number): void {
     for (let r = 0; r < 16; r++) for (let c = 0; c < 16; c++) this.block(page, tile, c, r, x + c * HI, y + r * HI);

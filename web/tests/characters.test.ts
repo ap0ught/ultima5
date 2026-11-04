@@ -539,7 +539,7 @@ describe('export and import, at their edges', () => {
     const chosen = newGame();
     const clip = page({});
     chosen.g.hooks.transfer = clip;
-    chosen.p.keys.push(K.Down, Pad.A, Pad.A, Pad.A); // Dupre; to the clipboard; (the message read)
+    chosen.p.keys.push(K.Down, Pad.A, Pad.A, Pad.A, Pad.A); // Dupre; to the clipboard; JSON; (the message read)
     await exportGame(chosen.g);
     expect(chosen.p.log).toContain('Export whose game?');
     expect(avatarName(JSON.parse(clip.copied[0]) as SaveData)).toBe('Dupre');

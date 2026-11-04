@@ -9,6 +9,7 @@
  */
 
 import { charKey, chooseCharacter, MAX_CHARACTERS, newCharacter } from './characters.ts';
+import { DEFAULT_APPEARANCE, FIGURES, SKIN, type Appearance } from './appearance.ts';
 import type { Game } from './game.ts';
 import { choose, showText, wrap } from './menu.ts';
 import { loadOptions, normaliseOptions, saveOptions, type Options } from './settings.ts';
@@ -29,6 +30,8 @@ import {
 export interface Transfer {
   /** Onto the clipboard. */
   copy(text: string): Promise<void>;
+  /** Copy a rendered character PNG to the clipboard. */
+  copyImage?: ((text: string) => Promise<void>) | undefined;
   /** Off the clipboard. */
   paste(): Promise<string>;
   /** The page's own box to paste into, where the clipboard cannot be read: its text, or null. */
@@ -38,12 +41,80 @@ export interface Transfer {
    * or null when they chose no place for it. Absent where no file can be written.
    */
   save?: ((text: string, name: string) => Promise<string | null>) | undefined;
-  /** Desktop JSON files already in Downloads/Ultima5, for a controller-friendly in-game chooser. */
+  /** Saved character group image, with the save embedded in its PNG metadata. */
+  saveImage?: ((text: string, name: string) => Promise<string | null>) | undefined;
+  /** Desktop JSON and PNG files already in Downloads/Ultima5, for a controller-friendly in-game chooser. */
   list?: (() => Promise<string[]>) | undefined;
-  /** Read one file returned by list. */
-  read?: ((name: string) => Promise<string>) | undefined;
+  /** Read one file returned by list: JSON text or a PNG's bytes. */
+  read?: ((name: string) => Promise<string | Uint8Array>) | undefined;
   /** A file the player picks, read; '' when they pick none. */
-  open(): Promise<string>;
+  open(): Promise<string | Uint8Array>;
+}
+
+/** Read the save embedded by pngWithSave in a character PNG. */
+export function readPngSave(bytes: Uint8Array): string {
+  const signature = '\x89PNG\r\n\x1a\n';
+  if (bytes.length < 8 || String.fromCharCode(...bytes.subarray(0, 8)) !== signature) throw new Error('it is not a PNG');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 8;
+  while (offset + 12 <= bytes.length) {
+    const length = view.getUint32(offset);
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > bytes.length) break;
+    if (type === 'iTXt') {
+      const data = bytes.subarray(dataStart, dataEnd);
+      const keywordEnd = data.indexOf(0);
+      if (keywordEnd >= 0 && new TextDecoder().decode(data.subarray(0, keywordEnd)) === 'Ultima5Save' && data.length >= keywordEnd + 5) {
+        if (data[keywordEnd + 1] !== 0) throw new Error('the PNG save metadata is compressed');
+        return new TextDecoder().decode(data.subarray(keywordEnd + 5));
+      }
+    }
+    offset = dataEnd + 4;
+  }
+  throw new Error('the PNG has no embedded Ultima V save');
+}
+
+function readImportFile(value: string | Uint8Array): string {
+  return typeof value === 'string' ? value : readPngSave(value);
+}
+
+function importIdentity(text: string): string {
+  try {
+    const sort = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(sort);
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, sort(item)]));
+      }
+      return value;
+    };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text.trim());
+    } catch {
+      parsed = JSON.parse(mendImport(text).trim());
+    }
+    return JSON.stringify(sort(parsed));
+  } catch {
+    return text.trim();
+  }
+}
+
+export async function uniqueImportFiles(names: string[], read: (name: string) => Promise<string | Uint8Array>): Promise<string[]> {
+  const files: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    try {
+      const identity = importIdentity(readImportFile(await read(name)));
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+    } catch {
+      // Keep unreadable files visible so the player can see why one fails.
+    }
+    files.push(name);
+  }
+  return files;
 }
 
 /**
@@ -118,6 +189,32 @@ export function exportName(when = new Date(), who = ''): string {
   return `ultima5-${name ? `${name}-` : ''}${day}-${two(when.getHours())}${two(when.getMinutes())}.json`;
 }
 
+export function importFileLabel(fileName: string): string {
+  const match = /^ultima5-(?:(.*?)-)?([0-9]{8})-([0-9]{4})\.(json|png)$/i.exec(fileName);
+  if (!match) return fileName.length > 36 ? `${fileName.slice(0, 33)}...` : fileName;
+  const [, rawName = '', day, clock, extension] = match;
+  const name = rawName ? (rawName.length > 12 ? `${rawName.slice(0, 11)}…` : rawName) : 'Unnamed';
+  return `${name} · ${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6)} ${clock.slice(0, 2)}:${clock.slice(2)} · ${extension.toUpperCase()}`;
+}
+
+const xml = (value: string): string => value.replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', "'": '&apos;' })[c]!);
+const hex = (value: number): string => `#${value.toString(16).padStart(6, '0')}`;
+
+/** A portable character card: an SVG portrait and labels, with the complete JSON save in base64 metadata. */
+export function characterImage(text: string, when = new Date()): string {
+  const save = parseSave(text);
+  const look: Appearance = save.appearance ?? DEFAULT_APPEARANCE;
+  const name = avatarName(save) || 'The nameless';
+  const figure = FIGURES[look.figure]?.name ?? FIGURES[0].name;
+  const skin = SKIN[look.skin] ?? SKIN[DEFAULT_APPEARANCE.skin];
+  const savedAt = new Date(save.written || when.getTime()).toLocaleString();
+  const encoded = btoa(unescape(encodeURIComponent(text)));
+  const face = hex(skin[0]);
+  const shade = hex(skin[2]);
+  const clothes = ['#344e86', '#6b3d91', '#3c7a55', '#8a3d3d', '#78602c'][look.figure] ?? '#344e86';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480"><metadata id="ultima5-save" data-format="ultima5-json-base64">${encoded}</metadata><rect width="640" height="480" fill="#171522"/><rect x="24" y="24" width="592" height="432" rx="16" fill="#29243b" stroke="#d7b56d" stroke-width="4"/><text x="320" y="72" fill="#f4d99b" font-family="sans-serif" font-size="34" text-anchor="middle" font-weight="bold">${xml(name)}</text><text x="320" y="108" fill="#c8bfd8" font-family="sans-serif" font-size="20" text-anchor="middle">${xml(figure)}</text><g shape-rendering="crispEdges"><path fill="${clothes}" d="M220 395v-95h55v-55h90v55h55v95z"/><rect fill="${face}" x="270" y="150" width="100" height="105"/><path fill="${shade}" d="M270 215h100v40H270z"/><path fill="#211b24" d="M260 145h120v28H260zM275 130h90v20h-90z"/><rect fill="#171522" x="290" y="190" width="14" height="14"/><rect fill="#171522" x="336" y="190" width="14" height="14"/><rect fill="#d7b56d" x="306" y="225" width="28" height="8"/><rect fill="#d7b56d" x="310" y="300" width="20" height="80"/></g><text x="320" y="430" fill="#c8bfd8" font-family="sans-serif" font-size="18" text-anchor="middle">Saved ${xml(savedAt)}</text></svg>`;
+}
+
 /** A character, as a list of them names each: the Avatar's name ("Shalom"). */
 const nameOf = (c: Character): string => avatarName(c.data) || 'The nameless';
 
@@ -144,30 +241,51 @@ export async function exportGame(g: Game): Promise<void> {
   const text = exportText(g, id);
   if (!text) return say(g, 'Export', 'There is no saved game to export.');
   const fileName = exportName(new Date(), avatarName(parseSave(text)));
-  const where = await choose(
+  const destination = await choose(
     g,
-    'Export',
+    'Export where?',
     [
-      { label: 'To the clipboard', note: 'To paste into Import on another browser or device.' },
-      ...(t.save ? [{ label: 'To a file', note: `Saved as ${fileName}.` }] : []),
+      ...(t.copyImage ? [{ label: 'To the clipboard', note: 'Copy a save or character image.' }] : [{ label: 'To the clipboard', note: 'Copy the save JSON.' }]),
+      ...(t.save ? [{ label: 'To a file', note: `Save in JSON or PNG format.` }] : []),
     ],
     0,
     true,
   );
-  if (where === 0) {
+  if (destination < 0) return;
+  const imageAvailable = destination === 0 ? Boolean(t.copyImage) : Boolean(t.saveImage);
+  const formatChoices = [
+    { label: 'The saved game (JSON)', note: 'Portable save data for importing.' },
+    ...(imageAvailable ? [{ label: 'The character image (PNG)', note: 'Group shot with the complete save embedded.' }] : []),
+  ];
+  const format = await choose(g, 'Export what?', formatChoices, 0, true);
+  if (format < 0) return;
+  const image = format === 1;
+  if (!image) {
     try {
-      await t.copy(text);
-      await say(g, 'Export', 'The game is copied to the clipboard.');
-    } catch {
-      await say(g, 'Export', 'The clipboard is not available here.');
+      if (destination === 0) {
+        await t.copy(text);
+        await say(g, 'Export', 'The saved game JSON is copied to the clipboard.');
+      } else if (t.save) {
+        const name = await t.save(text, fileName);
+        if (name !== null) await say(g, 'Export', `The saved game is saved as ${name}.`);
+      }
+    } catch (error) {
+      console.error('save export failed', error);
+      await say(g, 'Export', destination === 0 ? 'The clipboard is not available here.' : 'A file could not be saved here.');
     }
-  } else if (where === 1 && t.save) {
-    try {
-      const name = await t.save(text, fileName);
-      if (name !== null) await say(g, 'Export', `The game is saved as ${name}.`); // null: no place chosen
-    } catch {
-      await say(g, 'Export', 'A file could not be saved here.');
+    return;
+  }
+  try {
+    if (destination === 0 && t.copyImage) {
+      await t.copyImage(text);
+      await say(g, 'Export', 'The character PNG is copied to the clipboard.');
+    } else if (t.saveImage) {
+      const name = await t.saveImage(text, fileName.replace(/\.json$/, '.png'));
+      if (name !== null) await say(g, 'Export', `The character PNG is saved as ${name}.`);
     }
+  } catch (error) {
+    console.error('character image export failed', error);
+    await say(g, 'Export', destination === 0 ? 'The character PNG could not be copied here.' : 'The character PNG could not be saved here.');
   }
 }
 
@@ -200,16 +318,16 @@ export async function importGame(g: Game): Promise<boolean> {
   } else if (from === 1) {
     try {
       if (t.list && t.read) {
-        const files = await t.list();
+        const files = await uniqueImportFiles(await t.list(), t.read);
         if (!files.length) {
-          await say(g, 'Import', 'There are no JSON files in Downloads/Ultima5.');
+          await say(g, 'Import', 'There are no JSON or PNG files in Downloads/Ultima5.');
           return false;
         }
-        const picked = await choose(g, 'Import which file?', files.map((name) => ({ label: name })), files.length - 1, true);
+        const picked = await choose(g, 'Import which file?', files.map((name) => ({ label: importFileLabel(name) })), files.length - 1, true, undefined, 38);
         if (picked < 0) return false;
-        text = await t.read(files[picked]);
+        text = readImportFile(await t.read(files[picked]));
       } else {
-        text = await t.open();
+        text = readImportFile(await t.open());
       }
       text = text.trim();
     } catch {

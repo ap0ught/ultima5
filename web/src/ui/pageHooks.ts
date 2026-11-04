@@ -10,13 +10,17 @@
 import type { Game } from '../game/game.ts';
 import { LOST_FOCUS, Pad } from '../game/io.ts';
 import { effectsOf, saveOptions, soundtrackOf, type Options } from '../game/settings.ts';
+import { avatarName, fromBase64, parseSave } from '../game/storage.ts';
+import { Save } from '../game/save.ts';
+import { partyFigures } from '../game/world.ts';
 import { clearInstalled } from '../install/store.ts';
 import { GamepadInput } from './gamepad.ts';
 import type { CapacitorLike } from './platform.ts';
 import { mapKey, showMap } from './mapView.ts';
 import { menuUp } from './pageMenu.ts';
 import { ScanlineOverlay } from './scanlines.ts';
-import { addressedAsLady } from '../game/appearance.ts';
+import { addressedAsLady, validAppearance } from '../game/appearance.ts';
+import { handsOf } from '../game/switchWeapon.ts';
 import type { Screen } from './screen.ts';
 import type { PcSound } from './sound.ts';
 import { fullScreen } from './fullScreen.ts';
@@ -153,24 +157,25 @@ function dialog(message: string, paste: boolean, buttons: string[]): Promise<{ b
 }
 
 /** A file the player picks, read; '' when they pick none (the ultima3 port's picker). */
-function pickFile(): Promise<string> {
+function pickFile(): Promise<string | Uint8Array> {
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.json,.txt,application/json,text/plain';
+    input.accept = '.json,.png,.txt,application/json,image/png,text/plain';
     input.style.display = 'none';
     document.body.appendChild(input);
     let done = false;
-    const finish = (text: string): void => {
+    const finish = (value: string | Uint8Array): void => {
       if (done) return;
       done = true;
       input.remove();
-      resolve(text);
+      resolve(value);
     };
     input.addEventListener('change', () => {
       const f = input.files?.[0];
       if (!f) return finish('');
-      f.text().then(finish, (e: unknown) => {
+      const read = f.name.toLowerCase().endsWith('.png') ? f.arrayBuffer().then((bytes) => new Uint8Array(bytes)) : f.text();
+      read.then(finish, (e: unknown) => {
         done = true;
         input.remove();
         reject(e instanceof Error ? e : new Error(String(e)));
@@ -184,12 +189,33 @@ function pickFile(): Promise<string> {
   });
 }
 
+type DesktopExports = {
+  reserve: (name: string) => Promise<string | null>;
+  write?: (name: string, bytes: ArrayBuffer | Uint8Array) => Promise<string | null>;
+};
+
+/** The Electron bridge's binary path, kept separate so the desktop path is testable without a browser download. */
+export function desktopSave(native: DesktopExports | undefined): ((contents: Blob, name: string) => Promise<string>) | null {
+  const write = native?.write;
+  if (!write) return null;
+  return async (contents, name) => {
+    const actualName = await native.reserve(name);
+    if (!actualName) throw new Error('No unused export filename is available');
+    const written = await write(actualName, new Uint8Array(await contents.arrayBuffer()));
+    if (!written) throw new Error('The image could not be written');
+    return written;
+  };
+}
+
 /** `text` saved as a file named `name`, by the browser's download. */
-async function saveFile(text: string, name: string): Promise<string> {
-  const native = (window as { u5native?: { exports?: { reserve: (name: string) => Promise<string | null> } } }).u5native?.exports;
+async function saveFile(contents: string | Blob, name: string): Promise<string> {
+  const native = (window as { u5native?: { exports?: DesktopExports } }).u5native?.exports;
+  const desktop = contents instanceof Blob ? desktopSave(native) : null;
+  if (desktop && contents instanceof Blob) return desktop(contents, name);
   const actualName = native ? await native.reserve(name) : name;
   if (!actualName) throw new Error('No unused export filename is available');
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const type = name.endsWith('.png') ? 'image/png' : name.endsWith('.svg') ? 'image/svg+xml' : 'application/json';
+  const url = URL.createObjectURL(contents instanceof Blob ? contents : new Blob([contents], { type }));
   const a = document.createElement('a');
   a.href = url;
   a.download = actualName;
@@ -198,6 +224,133 @@ async function saveFile(text: string, name: string): Promise<string> {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
   return actualName;
+}
+
+function pngCrc(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** Add an uncompressed UTF-8 iTXt chunk after IHDR so the PNG remains a normal viewable image. */
+async function pngWithSave(pngUrl: string, text: string): Promise<Blob> {
+  const source = new Uint8Array(await (await fetch(pngUrl)).arrayBuffer());
+  const encoder = new TextEncoder();
+  const keyword = encoder.encode('Ultima5Save');
+  const payload = new Uint8Array(keyword.length + 5 + encoder.encode(text).length);
+  payload.set(keyword, 0);
+  payload[keyword.length] = 0; // keyword terminator
+  payload[keyword.length + 1] = 0; // uncompressed
+  payload[keyword.length + 2] = 0; // compression method
+  payload[keyword.length + 3] = 0; // language tag terminator
+  payload[keyword.length + 4] = 0; // translated keyword terminator
+  payload.set(encoder.encode(text), keyword.length + 5);
+  const type = encoder.encode('iTXt');
+  const chunk = new Uint8Array(12 + payload.length);
+  new DataView(chunk.buffer).setUint32(0, payload.length);
+  chunk.set(type, 4);
+  chunk.set(payload, 8);
+  new DataView(chunk.buffer).setUint32(8 + payload.length, pngCrc(new Uint8Array(chunk.buffer, 4, 4 + payload.length)));
+  // PNG signature (8) + IHDR (4 length, 4 type, 13 data, 4 CRC).
+  const out = new Uint8Array(source.length + chunk.length);
+  out.set(source.subarray(0, 33), 0);
+  out.set(chunk, 33);
+  out.set(source.subarray(33), 33 + chunk.length);
+  return new Blob([out], { type: 'image/png' });
+}
+
+/** Render the active party with the engine's StandardArt figures into a portable PNG. */
+async function engineCharacterImage(g: Game, screen: Screen, text: string): Promise<Blob> {
+  const art = screen.characterArt;
+  if (!art) throw new Error('Character image export requires the game character art to be loaded');
+  const save = parseSave(text);
+  const label = avatarName(save) || 'The nameless';
+  const imageGame = Object.create(g) as Game;
+  imageGame.s = new Save(fromBase64(save.save));
+  imageGame.appearance = validAppearance(save.appearance);
+  imageGame.companionLooks = new Map(Object.entries(save.companions ?? {}));
+  const classNames: Record<string, string> = {
+    A: 'Avatar',
+    M: 'Mage',
+    B: 'Bard',
+    F: 'Fighter',
+    D: 'Druid',
+    T: 'Tinker',
+    P: 'Paladin',
+    R: 'Ranger',
+    S: 'Shepherd',
+  };
+  const itemNames = g.data.table(0x17f6, 0x30);
+  const members = partyFigures(imageGame, true);
+  const saveMembers = imageGame.s.members.slice(0, imageGame.s.partySize);
+  const memberNames = saveMembers.map((member, i) => member.name?.trim() || (i === 0 ? label : 'Unnamed'));
+  const card = document.createElement('canvas');
+  card.width = 800;
+  card.height = 600;
+  const ctx = card.getContext('2d') as CanvasRenderingContext2D;
+  ctx.fillStyle = '#171522';
+  ctx.fillRect(0, 0, card.width, card.height);
+  ctx.strokeStyle = '#d7b56d';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(18, 18, card.width - 36, card.height - 36);
+  ctx.fillStyle = '#f4d99b';
+  ctx.font = 'bold 42px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, 400, 72);
+  ctx.fillStyle = '#c8bfd8';
+  ctx.font = '24px sans-serif';
+  ctx.fillText(`${members.length} party members`, 400, 108);
+  ctx.imageSmoothingEnabled = false;
+  const cell = document.createElement('canvas');
+  const pixelsSide = Math.sqrt(art.figure(0).length);
+  cell.width = pixelsSide;
+  cell.height = pixelsSide;
+  const cellCtx = cell.getContext('2d') as CanvasRenderingContext2D;
+  const columnWidth = card.width / Math.max(1, members.length);
+  const fitCentered = (value: string, center: number, y: number, maxWidth: number, font: string): void => {
+    ctx.font = font;
+    let size = Number(font.match(/\d+/)?.[0] ?? 14);
+    while (ctx.measureText(value).width > maxWidth && size > 10) {
+      size--;
+      ctx.font = `${size}px sans-serif`;
+    }
+    ctx.fillText(value, center, y);
+  };
+  try {
+    g.draw.avatar?.(imageGame.appearance, addressedAsLady(imageGame));
+    members.forEach((member, i) => {
+      screen.draw.dressAs?.(member.dress ?? null);
+      const pixels = art.figure(member.tile);
+      screen.draw.dressAs?.(null);
+      cellCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), pixelsSide, pixelsSide), 0, 0);
+      const center = (i + 0.5) * columnWidth;
+      const x = center - 64;
+      const y = 170 + Math.floor(i / 4) * 180;
+      ctx.drawImage(cell, x, y, 128, 128);
+      ctx.fillStyle = '#c8bfd8';
+      fitCentered(memberNames[i] ?? `Member ${i + 1}`, center, y + 154, columnWidth - 20, '18px sans-serif');
+      const saveMember = saveMembers[i];
+      const cls = classNames[String.fromCharCode(saveMember?.cls ?? 0)] ?? 'Unknown';
+      ctx.fillStyle = '#d7b56d';
+      fitCentered(`${cls} · Level ${saveMember?.level ?? '?'}`, center, y + 174, columnWidth - 20, '14px sans-serif');
+      const held = saveMember
+        ? handsOf(imageGame, i)
+            .map((item) => (itemNames[item] ?? '').replace(/^[*!(].*?\\s?/, '').trim())
+            .filter(Boolean)
+        : [];
+      fitCentered(`Holding: ${held.length ? held.join(', ') : 'Nothing'}`, center, y + 194, columnWidth - 20, '14px sans-serif');
+    });
+    const savedAt = new Date(save.written).toLocaleString();
+    ctx.fillText(`Saved ${savedAt}`, 400, 560);
+    const png = card.toDataURL('image/png');
+    return pngWithSave(png, text);
+  } finally {
+    screen.draw.dressAs?.(null);
+    g.draw.avatar?.(g.appearance, addressedAsLady(g));
+  }
 }
 
 /** The Android app's GameFolder plugin, its half for Export (mobile/.../GameFolderPlugin.java saveFile). */
@@ -323,6 +476,11 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
     applyOptions: apply,
     transfer: {
       copy: (text) => navigator.clipboard.writeText(text),
+      copyImage: async (text) => {
+        const image = await engineCharacterImage(g, screen, text);
+        if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('Image clipboard is unavailable');
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': image })]);
+      },
       paste: () => navigator.clipboard.readText(),
       async pasteBox() {
         const r = await dialog('The clipboard cannot be read here. Paste the saved game below.', true, ['Cancel', 'Import']);
@@ -331,7 +489,14 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       },
       // The Android app's web view downloads nothing: there the app saves the file itself (androidSave). A web view
       // without that offers the clipboard only.
-      save: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
+      save: native ? androidSave((window as { Capacitor?: unknown }).Capacitor) ?? undefined : saveFile,
+      saveImage: native
+        ? undefined
+        : async (text, name) => {
+            const image = await engineCharacterImage(g, screen, text);
+            const saved = await saveFile(image, name);
+            return saved;
+          },
       // A file input works in the Android app as in a browser: Capacitor's web view opens the system's picker for it.
       list: desktopFiles?.list,
       read: desktopFiles

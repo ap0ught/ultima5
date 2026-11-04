@@ -1259,6 +1259,12 @@ export class Screen implements Platform {
   /** Which dungeon's walls are being drawn (1-8, 0 outside one). */
   private tint = 0;
 
+  /** Character art for export, regardless of which display look is currently selected. */
+  get characterArt(): { figure: (tile: number) => Uint32Array } | null {
+    const art = this.fb.art;
+    return art.figure ? { figure: art.figure.bind(art) } : null;
+  }
+
   /** The Standard tile art if that is the set in use, for what is drawn outside the screen (the land map). */
   get standardArt(): StandardArt | null {
     return this.look === 'standard' && this.standard ? this.standard : null;

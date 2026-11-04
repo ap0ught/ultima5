@@ -66,9 +66,12 @@ const exportDir = () => {
 };
 const reservedExports = new Set();
 function reserveExportName(name) {
-  if (typeof name !== 'string' || basename(name) !== name || !/\.json$/i.test(name)) return null;
-  const ext = name.slice(-5);
-  const stem = name.slice(0, -5);
+  if (typeof name !== 'string' || basename(name) !== name) return null;
+  const match = name.match(/^(.*)(\.[A-Za-z0-9]+)$/);
+  if (!match) return null;
+  const [, stem, ext] = match;
+  const normalizedExt = ext.toLowerCase();
+  if (normalizedExt !== '.json' && normalizedExt !== '.png') return null;
   for (let suffix = 0; suffix < 100_000; suffix++) {
     const candidate = suffix ? `${stem} (${suffix})${ext}` : name;
     try {
@@ -229,6 +232,24 @@ app.whenReady().then(() => {
   // it up, the player told of it. Only the game's own page may ask.
   const fromGame = (event) => String(event.senderFrame?.url ?? '').startsWith('app://');
   ipcMain.handle('reserve-export-file', (event, name) => (fromGame(event) ? reserveExportName(name) : null));
+  ipcMain.handle('write-export-file', (event, name, bytes) => {
+    if (!fromGame(event) || typeof name !== 'string' || !reservedExports.has(name)) {
+      console.error('write-export-file rejected', { name, reserved: typeof name === 'string' && reservedExports.has(name) });
+      return null;
+    }
+    if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) {
+      console.error('write-export-file received non-binary data', { name, type: typeof bytes });
+      return null;
+    }
+    try {
+      writeFileSync(join(exportDir(), name), Buffer.from(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes));
+      reservedExports.delete(name);
+      return name;
+    } catch (error) {
+      console.error('write-export-file failed', name, error);
+      return null;
+    }
+  });
   const updatesFile = join(app.getPath('userData'), 'updates.json');
   ipcMain.handle('update-offer', (event) => (fromGame(event) ? currentOffer() : null));
   ipcMain.handle('update-apply', (event) => fromGame(event) && applyUpdate({ electron }));
@@ -243,7 +264,7 @@ app.whenReady().then(() => {
   const downloadFiles = () => {
     try {
       return readdirSync(exportDir(), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && /\.json$/i.test(entry.name) && !reservedExports.has(entry.name))
+        .filter((entry) => entry.isFile() && /\.(json|png)$/i.test(entry.name) && !reservedExports.has(entry.name))
         .map((entry) => entry.name)
         .sort((a, b) => a.localeCompare(b));
     } catch {
@@ -252,9 +273,9 @@ app.whenReady().then(() => {
   };
   ipcMain.handle('list-import-files', (event) => (fromGame(event) ? downloadFiles() : []));
   ipcMain.handle('read-import-file', (event, name) => {
-    if (!fromGame(event) || typeof name !== 'string' || basename(name) !== name || !/\.json$/i.test(name)) return null;
+    if (!fromGame(event) || typeof name !== 'string' || basename(name) !== name || !/\.(json|png)$/i.test(name)) return null;
     try {
-      return readFileSync(join(exportDir(), name), 'utf8');
+      return /\.png$/i.test(name) ? new Uint8Array(readFileSync(join(exportDir(), name))) : readFileSync(join(exportDir(), name), 'utf8');
     } catch {
       return null;
     }

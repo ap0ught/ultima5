@@ -3,15 +3,17 @@ import { chooseCharacter } from '../src/game/characters.ts';
 import { K } from '../src/game/io';
 import { wrap } from '../src/game/menu';
 import { SAVE_KEY, saveKeys, serialize, unpackSave } from '../src/game/storage';
-import { asciiJson, exportGame, exportName, exportText, importGame, mendImport, type Transfer } from '../src/game/transfer';
+import { asciiJson, characterImage, exportGame, exportName, exportText, importFileLabel, importGame, mendImport, readPngSave, type Transfer, uniqueImportFiles } from '../src/game/transfer';
 import { parseSave } from '../src/game/storage';
 import { newGame } from './helpers';
 
-/**
- * A game carried between browsers, devices and the apps (transfer.ts, the ultima3 port's Export and Import): out to
- * the clipboard or a file and back from either, chosen on the screen, and put in the saved game's place only when
- * the player says so.
- */
+describe('import file labels', () => {
+  it('keeps the name, timestamp, and format inside the picker label', () => {
+    expect(importFileLabel('ultima5-Jarek-20261104-0822.png')).toBe('Jarek · 2026-11-04 08:22 · PNG');
+    expect(importFileLabel('ultima5-20261104-0822.json')).toBe('Unnamed · 2026-11-04 08:22 · JSON');
+    expect(importFileLabel('ultima5-VeryLongCharacterName-20261104-0822.png')).toContain('2026-11-04 08:22');
+  });
+});
 
 /** The browser's local storage, in memory. */
 const store = new Map<string, string>();
@@ -26,7 +28,40 @@ beforeEach(() => {
 });
 afterEach(() => delete (globalThis as { localStorage?: unknown }).localStorage);
 
-/** A page's clipboard and files, remembering what went through them. */
+describe('PNG save imports', () => {
+  it('extracts the embedded save from an Ultima V character PNG', () => {
+    const text = '{"game":"ultima5","save":"embedded"}';
+    const encoder = new TextEncoder();
+    const keyword = encoder.encode('Ultima5Save');
+    const body = encoder.encode(text);
+    const payload = new Uint8Array(keyword.length + 5 + body.length);
+    payload.set(keyword);
+    payload[keyword.length] = 0;
+    payload[keyword.length + 1] = 0;
+    payload[keyword.length + 2] = 0;
+    payload[keyword.length + 3] = 0;
+    payload[keyword.length + 4] = 0;
+    payload.set(body, keyword.length + 5);
+    const png = new Uint8Array(8 + 12 + payload.length);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    new DataView(png.buffer).setUint32(8, payload.length);
+    png.set(encoder.encode('iTXt'), 12);
+    png.set(payload, 16);
+    expect(readPngSave(png)).toBe(text);
+  });
+  it('deduplicates files with equivalent save data', async () => {
+    const save = '{"b":2,"a":1}';
+    const files = await uniqueImportFiles(['first.json', 'same.png', 'different.json'], async (name) => name === 'different.json' ? '{"a":9,"b":2}' : save);
+    expect(files).toEqual(['first.json', 'different.json']);
+  });
+  it('keeps literal nonbreaking spaces distinct from ordinary spaces when deduplicating', async () => {
+    const files = await uniqueImportFiles(['nbsp.json', 'space.json', 'escaped.json'], async (name) =>
+      name === 'space.json' ? '{"journal":"a b"}' : name === 'escaped.json' ? '{"journal":"a\\u00a0b"}' : '{"journal":"a b"}',
+    );
+    expect(files).toEqual(['nbsp.json', 'space.json']);
+  });
+});
+
 function page(over: Partial<Transfer> = {}): Transfer & { copied: string[]; saved: [string, string][] } {
   const copied: string[] = [];
   const saved: [string, string][] = [];
@@ -53,6 +88,17 @@ function title(transfer: Transfer, ...keys: number[]) {
 }
 
 describe('exporting a game', () => {
+  it('creates a character image with a labeled save embedded in metadata', () => {
+    const { g } = newGame();
+    const saved = { ...serialize(g), written: 1_735_689_600_000 };
+    const image = characterImage(JSON.stringify(saved), new Date(1_735_689_600_000));
+    expect(image).toContain('<svg');
+    expect(image).toContain('id="ultima5-save"');
+    expect(image).toContain('data-format="ultima5-json-base64"');
+    expect(image).toContain('Saved');
+    expect(atob(image.match(/<metadata[^>]*>([^<]+)</)?.[1] ?? '')).toBe(JSON.stringify(saved));
+  });
+
   it('takes the game in play, or at the title the saved one, and names its file for the minute', () => {
     const { g } = newGame();
     expect(exportText(g)).toBeNull(); // at the title, nothing saved
@@ -69,20 +115,44 @@ describe('exporting a game', () => {
     const saved = JSON.stringify(serialize(newGame().g));
     store.set(SAVE_KEY, saved);
     const clip = page();
-    await exportGame(title(clip, K.Enter, K.Enter).g);
+    await exportGame(title(clip, K.Enter, K.Enter, K.Enter).g);
     expect(clip.copied).toEqual([saved]);
     const file = page();
-    await exportGame(title(file, K.Down, K.Enter, K.Enter).g);
+    await exportGame(title(file, K.Down, K.Enter, K.Enter, K.Enter).g);
     expect(file.saved[0][0]).toBe(saved);
     expect(file.saved[0][1]).toMatch(/^ultima5-([A-Za-z0-9]+-)?\d{8}-\d{4}\.json$/);
   });
 
+  it('exports the same game as JSON or PNG when the player chooses the destination and format', async () => {
+    const saved = JSON.stringify(serialize(newGame().g));
+    store.set(SAVE_KEY, saved);
+    const json = page();
+    await exportGame(title(json, K.Down, K.Enter, K.Enter, K.Enter).g);
+    expect(json.saved).toHaveLength(1);
+    expect(json.saved[0][0]).toBe(saved);
+    expect(json.saved[0][1]).toMatch(/\.json$/);
+
+    const png: { text: string; name: string }[] = [];
+    const image = page({ saveImage: async (text, name) => (png.push({ text, name }), name) });
+    await exportGame(title(image, K.Down, K.Enter, K.Down, K.Enter, K.Enter).g);
+    expect(png).toEqual([{ text: saved, name: expect.stringMatching(/\.png$/) }]);
+  });
+
+  it('copies the selected PNG representation to the clipboard', async () => {
+    const saved = JSON.stringify(serialize(newGame().g));
+    store.set(SAVE_KEY, saved);
+    const png: string[] = [];
+    const clip = page({ copyImage: async (text) => void png.push(text) });
+    await exportGame(title(clip, K.Enter, K.Down, K.Enter, K.Enter).g);
+    expect(clip.copied).toHaveLength(0);
+    expect(png).toEqual([saved]);
+  });
   it('says nothing more where the player chose no place for the file, and tells the name they chose where they did', async () => {
     store.set(SAVE_KEY, JSON.stringify(serialize(newGame().g)));
-    const none = title(page({ save: async () => null }), K.Down, K.Enter);
+    const none = title(page({ save: async () => null }), K.Down, K.Enter, K.Enter);
     await exportGame(none.g);
     expect(none.p.log).not.toContain('saved as');
-    const renamed = title(page({ save: async () => 'mine.json' }), K.Down, K.Enter, K.Enter);
+    const renamed = title(page({ save: async () => 'mine.json' }), K.Down, K.Enter, K.Enter, K.Enter);
     await exportGame(renamed.g);
     expect(renamed.p.log.replace(/\s+/g, ' ')).toContain('saved as mine.json.');
   });
@@ -103,6 +173,23 @@ describe('exporting a game', () => {
     expect(await save('{"save":1}', 'ultima5-20260926-1405.json')).toBeNull();
   });
 
+  it("uses the Electron desktop binary bridge with the PNG bytes, not the browser download path", async () => {
+    const { desktopSave } = await import('../src/ui/pageHooks.ts');
+    const calls: { name: string; bytes: Uint8Array }[] = [];
+    const save = desktopSave({
+      reserve: async (name) => `${name.replace('.png', '')} (1).png`,
+      write: async (name, bytes) => {
+        calls.push({ name, bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes) });
+        return name;
+      },
+    });
+    expect(save).not.toBeNull();
+    expect(await save!(new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'ultima5-Jarek.png')).toBe(
+      'ultima5-Jarek (1).png',
+    );
+    expect(calls).toEqual([{ name: 'ultima5-Jarek (1).png', bytes: new Uint8Array([137, 80, 78, 71]) }]);
+  });
+
   it("tells the file's name whole, broken after a hyphen where the panel is too narrow for it", () => {
     expect(wrap('The game is saved as ultima5-20260926-1032.json.')).toEqual(['The game is saved as', 'ultima5-20260926-', '1032.json.']);
   });
@@ -110,7 +197,7 @@ describe('exporting a game', () => {
   it('offers no file where none can be written (the Android app): the clipboard is the way out', async () => {
     store.set(SAVE_KEY, JSON.stringify(serialize(newGame().g)));
     const clip = page({ save: undefined });
-    await exportGame(title(clip, K.Down, K.Enter, K.Enter).g);
+    await exportGame(title(clip, K.Down, K.Enter, K.Enter, K.Enter).g);
     expect(clip.copied).toHaveLength(1); // the only line, however far down the bar was pressed
   });
 });
