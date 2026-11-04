@@ -262,7 +262,7 @@ app.whenReady().then(() => {
   const downloadFiles = () => {
     try {
       return readdirSync(exportDir(), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && /\.json$/i.test(entry.name) && !reservedExports.has(entry.name))
+        .filter((entry) => entry.isFile() && /\.(json|png)$/i.test(entry.name) && !reservedExports.has(entry.name))
         .map((entry) => entry.name)
         .sort((a, b) => a.localeCompare(b));
     } catch {
@@ -271,9 +271,9 @@ app.whenReady().then(() => {
   };
   ipcMain.handle('list-import-files', (event) => (fromGame(event) ? downloadFiles() : []));
   ipcMain.handle('read-import-file', (event, name) => {
-    if (!fromGame(event) || typeof name !== 'string' || basename(name) !== name || !/\.json$/i.test(name)) return null;
+    if (!fromGame(event) || typeof name !== 'string' || basename(name) !== name || !/\.(json|png)$/i.test(name)) return null;
     try {
-      return readFileSync(join(exportDir(), name), 'utf8');
+      return /\.png$/i.test(name) ? new Uint8Array(readFileSync(join(exportDir(), name))) : readFileSync(join(exportDir(), name), 'utf8');
     } catch {
       return null;
     }

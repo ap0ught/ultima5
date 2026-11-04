@@ -19,6 +19,7 @@ import { mapKey, showMap } from './mapView.ts';
 import { menuUp } from './pageMenu.ts';
 import { ScanlineOverlay } from './scanlines.ts';
 import { addressedAsLady } from '../game/appearance.ts';
+import { CELL } from './standardArt.ts';
 import type { Screen } from './screen.ts';
 import type { PcSound } from './sound.ts';
 import { fullScreen } from './fullScreen.ts';
@@ -40,30 +41,6 @@ function recall(key: string): string | null {
   } catch {
     return null;
   }
-}
-
-function showCharacterImage(image: Blob, fileName: string): void {
-  const back = document.createElement('div');
-  back.style.cssText = 'position:fixed;inset:0;z-index:35;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box;';
-  const box = document.createElement('div');
-  box.style.cssText = 'max-width:min(92vw,820px);max-height:94vh;background:#000;border:3px solid #b5693a;padding:10px;color:#fff;font:16px monospace;text-align:center;';
-  const imageElement = document.createElement('img');
-  imageElement.src = URL.createObjectURL(image);
-  imageElement.alt = 'Exported Ultima V character group';
-  imageElement.style.cssText = 'display:block;max-width:100%;max-height:78vh;image-rendering:pixelated;';
-  const caption = document.createElement('div');
-  caption.textContent = `${fileName} — A/B: close`;
-  caption.style.marginTop = '8px';
-  box.append(imageElement, caption);
-  back.appendChild(box);
-  const close = (): void => {
-    pageBox = null;
-    URL.revokeObjectURL(imageElement.src);
-    back.remove();
-  };
-  back.addEventListener('click', close);
-  pageBox = () => close();
-  document.body.appendChild(back);
 }
 
 /**
@@ -179,24 +156,25 @@ function dialog(message: string, paste: boolean, buttons: string[]): Promise<{ b
 }
 
 /** A file the player picks, read; '' when they pick none (the ultima3 port's picker). */
-function pickFile(): Promise<string> {
+function pickFile(): Promise<string | Uint8Array> {
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.json,.txt,application/json,text/plain';
+    input.accept = '.json,.png,.txt,application/json,image/png,text/plain';
     input.style.display = 'none';
     document.body.appendChild(input);
     let done = false;
-    const finish = (text: string): void => {
+    const finish = (value: string | Uint8Array): void => {
       if (done) return;
       done = true;
       input.remove();
-      resolve(text);
+      resolve(value);
     };
     input.addEventListener('change', () => {
       const f = input.files?.[0];
       if (!f) return finish('');
-      f.text().then(finish, (e: unknown) => {
+      const read = f.name.toLowerCase().endsWith('.png') ? f.arrayBuffer().then((bytes) => new Uint8Array(bytes)) : f.text();
+      read.then(finish, (e: unknown) => {
         done = true;
         input.remove();
         reject(e instanceof Error ? e : new Error(String(e)));
@@ -309,14 +287,14 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
   ctx.fillText(`${members.length} party members`, 400, 108);
   ctx.imageSmoothingEnabled = false;
   const cell = document.createElement('canvas');
-  cell.width = 32;
-  cell.height = 32;
+  cell.width = CELL;
+  cell.height = CELL;
   const cellCtx = cell.getContext('2d') as CanvasRenderingContext2D;
   members.forEach((member, i) => {
     screen.draw.dressAs?.(member.dress ?? null);
     const pixels = art.figure(member.tile);
     screen.draw.dressAs?.(null);
-    cellCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), 32, 32), 0, 0);
+    cellCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), CELL, CELL), 0, 0);
     const x = 120 + (i % 4) * 150;
     const y = 170 + Math.floor(i / 4) * 180;
     ctx.drawImage(cell, x, y, 128, 128);
@@ -470,7 +448,6 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       saveImage: async (text, name) => {
         const image = await engineCharacterImage(g, screen, text);
         const saved = await saveFile(image, name);
-        if (saved) showCharacterImage(image, saved);
         return saved;
       },
       // A file input works in the Android app as in a browser: Capacitor's web view opens the system's picker for it.

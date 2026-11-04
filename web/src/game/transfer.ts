@@ -43,12 +43,72 @@ export interface Transfer {
   save?: ((text: string, name: string) => Promise<string | null>) | undefined;
   /** Saved character group image, with the save embedded in its PNG metadata. */
   saveImage?: ((text: string, name: string) => Promise<string | null>) | undefined;
-  /** Desktop JSON files already in Downloads/Ultima5, for a controller-friendly in-game chooser. */
+  /** Desktop JSON and PNG files already in Downloads/Ultima5, for a controller-friendly in-game chooser. */
   list?: (() => Promise<string[]>) | undefined;
-  /** Read one file returned by list. */
-  read?: ((name: string) => Promise<string>) | undefined;
+  /** Read one file returned by list: JSON text or a PNG's bytes. */
+  read?: ((name: string) => Promise<string | Uint8Array>) | undefined;
   /** A file the player picks, read; '' when they pick none. */
-  open(): Promise<string>;
+  open(): Promise<string | Uint8Array>;
+}
+
+/** Read the save embedded by pngWithSave in a character PNG. */
+export function readPngSave(bytes: Uint8Array): string {
+  const signature = '\x89PNG\r\n\x1a\n';
+  if (bytes.length < 8 || String.fromCharCode(...bytes.subarray(0, 8)) !== signature) throw new Error('it is not a PNG');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 8;
+  while (offset + 12 <= bytes.length) {
+    const length = view.getUint32(offset);
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > bytes.length) break;
+    if (type === 'iTXt') {
+      const data = bytes.subarray(dataStart, dataEnd);
+      const keywordEnd = data.indexOf(0);
+      if (keywordEnd >= 0 && new TextDecoder().decode(data.subarray(0, keywordEnd)) === 'Ultima5Save' && data.length >= keywordEnd + 5) {
+        if (data[keywordEnd + 1] !== 0) throw new Error('the PNG save metadata is compressed');
+        return new TextDecoder().decode(data.subarray(keywordEnd + 5));
+      }
+    }
+    offset = dataEnd + 4;
+  }
+  throw new Error('the PNG has no embedded Ultima V save');
+}
+
+function readImportFile(value: string | Uint8Array): string {
+  return typeof value === 'string' ? value : readPngSave(value);
+}
+
+function importIdentity(text: string): string {
+  try {
+    const sort = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(sort);
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, sort(item)]));
+      }
+      return value;
+    };
+    return JSON.stringify(sort(JSON.parse(mendImport(text).trim())));
+  } catch {
+    return text.trim();
+  }
+}
+
+export async function uniqueImportFiles(names: string[], read: (name: string) => Promise<string | Uint8Array>): Promise<string[]> {
+  const files: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    try {
+      const identity = importIdentity(readImportFile(await read(name)));
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+    } catch {
+      // Keep unreadable files visible so the player can see why one fails.
+    }
+    files.push(name);
+  }
+  return files;
 }
 
 /**
@@ -244,16 +304,16 @@ export async function importGame(g: Game): Promise<boolean> {
   } else if (from === 1) {
     try {
       if (t.list && t.read) {
-        const files = await t.list();
+        const files = await uniqueImportFiles(await t.list(), t.read);
         if (!files.length) {
-          await say(g, 'Import', 'There are no JSON files in Downloads/Ultima5.');
+          await say(g, 'Import', 'There are no JSON or PNG files in Downloads/Ultima5.');
           return false;
         }
         const picked = await choose(g, 'Import which file?', files.map((name) => ({ label: name })), files.length - 1, true);
         if (picked < 0) return false;
-        text = await t.read(files[picked]);
+        text = readImportFile(await t.read(files[picked]));
       } else {
-        text = await t.open();
+        text = readImportFile(await t.open());
       }
       text = text.trim();
     } catch {

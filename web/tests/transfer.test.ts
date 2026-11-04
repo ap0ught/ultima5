@@ -3,7 +3,7 @@ import { chooseCharacter } from '../src/game/characters.ts';
 import { K } from '../src/game/io';
 import { wrap } from '../src/game/menu';
 import { SAVE_KEY, saveKeys, serialize, unpackSave } from '../src/game/storage';
-import { asciiJson, characterImage, exportGame, exportName, exportText, importGame, mendImport, type Transfer } from '../src/game/transfer';
+import { asciiJson, characterImage, exportGame, exportName, exportText, importGame, mendImport, readPngSave, type Transfer, uniqueImportFiles } from '../src/game/transfer';
 import { parseSave } from '../src/game/storage';
 import { newGame } from './helpers';
 
@@ -26,7 +26,34 @@ beforeEach(() => {
 });
 afterEach(() => delete (globalThis as { localStorage?: unknown }).localStorage);
 
-/** A page's clipboard and files, remembering what went through them. */
+describe('PNG save imports', () => {
+  it('extracts the embedded save from an Ultima V character PNG', () => {
+    const text = '{"game":"ultima5","save":"embedded"}';
+    const encoder = new TextEncoder();
+    const keyword = encoder.encode('Ultima5Save');
+    const body = encoder.encode(text);
+    const payload = new Uint8Array(keyword.length + 5 + body.length);
+    payload.set(keyword);
+    payload[keyword.length] = 0;
+    payload[keyword.length + 1] = 0;
+    payload[keyword.length + 2] = 0;
+    payload[keyword.length + 3] = 0;
+    payload[keyword.length + 4] = 0;
+    payload.set(body, keyword.length + 5);
+    const png = new Uint8Array(8 + 12 + payload.length);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    new DataView(png.buffer).setUint32(8, payload.length);
+    png.set(encoder.encode('iTXt'), 12);
+    png.set(payload, 16);
+    expect(readPngSave(png)).toBe(text);
+  });
+  it('deduplicates files with equivalent save data', async () => {
+    const save = '{"b":2,"a":1}';
+    const files = await uniqueImportFiles(['first.json', 'same.png', 'different.json'], async (name) => name === 'different.json' ? '{"a":9,"b":2}' : save);
+    expect(files).toEqual(['first.json', 'different.json']);
+  });
+});
+
 function page(over: Partial<Transfer> = {}): Transfer & { copied: string[]; saved: [string, string][] } {
   const copied: string[] = [];
   const saved: [string, string][] = [];
