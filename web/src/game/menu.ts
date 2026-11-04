@@ -15,6 +15,7 @@ import { foesAbout } from './bumpAct.ts';
 import { animating, clearBorderTitle, drawVitals, updateFrame, Win } from './frame.ts';
 import { drawTextCard } from './shopCard.ts';
 import { CF, Game } from './game.ts';
+import { exportGame, importGame } from './transfer.ts';
 import { menuKey, PAUSED } from './input.ts';
 import { besideHarpsichord } from './harpsichord.ts';
 import { HARPSICHORD, K, Pad, SAVE_NOW } from './io.ts';
@@ -1965,7 +1966,6 @@ export function transferLines(g: Game): Setting[] {
       note: 'The game as text, to the clipboard or a file, to carry elsewhere.',
       enabled: !!g.hooks.transfer,
       act: async () => {
-        const { exportGame } = await import('./transfer.ts');
         await exportGame(g);
       },
     },
@@ -1975,7 +1975,6 @@ export function transferLines(g: Game): Setting[] {
       note: 'A game exported elsewhere, from the clipboard or a file.',
       enabled: !!g.hooks.transfer,
       act: async () => {
-        const { importGame } = await import('./transfer.ts');
         if (!(await importGame(g))) return;
         // Taken up from the title, as a game loaded is.
         location.reload();
