@@ -171,7 +171,7 @@ export async function exportGame(g: Game): Promise<void> {
     [
       { label: 'To the clipboard', note: 'To paste into Import on another browser or device.' },
       ...(t.save ? [{ label: 'To a file', note: `Saved as ${fileName}.` }] : []),
-      ...(t.saveImage ? [{ label: 'As a character image', note: 'A portrait card with the save embedded in its metadata.' }] : []),
+      ...(t.saveImage ? [{ label: 'As a character image', note: 'A group-shot PNG with the save embedded in its metadata.' }] : []),
     ],
     0,
     true,

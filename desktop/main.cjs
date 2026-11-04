@@ -66,9 +66,10 @@ const exportDir = () => {
 };
 const reservedExports = new Set();
 function reserveExportName(name) {
-  if (typeof name !== 'string' || basename(name) !== name || !/\.json$/i.test(name)) return null;
-  const ext = name.slice(-5);
-  const stem = name.slice(0, -5);
+  if (typeof name !== 'string' || basename(name) !== name || !/^.+\.[A-Za-z0-9]+$/.test(name)) return null;
+  const match = name.match(/^(.*)(\.[A-Za-z0-9]+)$/);
+  if (!match) return null;
+  const [, stem, ext] = match;
   for (let suffix = 0; suffix < 100_000; suffix++) {
     const candidate = suffix ? `${stem} (${suffix})${ext}` : name;
     try {
