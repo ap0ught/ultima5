@@ -3,7 +3,7 @@ import { chooseCharacter } from '../src/game/characters.ts';
 import { K } from '../src/game/io';
 import { wrap } from '../src/game/menu';
 import { SAVE_KEY, saveKeys, serialize, unpackSave } from '../src/game/storage';
-import { asciiJson, exportGame, exportName, exportText, importGame, mendImport, type Transfer } from '../src/game/transfer';
+import { asciiJson, characterImage, exportGame, exportName, exportText, importGame, mendImport, type Transfer } from '../src/game/transfer';
 import { parseSave } from '../src/game/storage';
 import { newGame } from './helpers';
 
@@ -53,6 +53,17 @@ function title(transfer: Transfer, ...keys: number[]) {
 }
 
 describe('exporting a game', () => {
+  it('creates a character image with a labeled save embedded in metadata', () => {
+    const { g } = newGame();
+    const saved = { ...serialize(g), written: 1_735_689_600_000 };
+    const image = characterImage(JSON.stringify(saved), new Date(1_735_689_600_000));
+    expect(image).toContain('<svg');
+    expect(image).toContain('id="ultima5-save"');
+    expect(image).toContain('data-format="ultima5-json-base64"');
+    expect(image).toContain('Saved');
+    expect(atob(image.match(/<metadata[^>]*>([^<]+)</)?.[1] ?? '')).toBe(JSON.stringify(saved));
+  });
+
   it('takes the game in play, or at the title the saved one, and names its file for the minute', () => {
     const { g } = newGame();
     expect(exportText(g)).toBeNull(); // at the title, nothing saved

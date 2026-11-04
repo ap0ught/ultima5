@@ -332,6 +332,7 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       // The Android app's web view downloads nothing: there the app saves the file itself (androidSave). A web view
       // without that offers the clipboard only.
       save: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
+      saveImage: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
       // A file input works in the Android app as in a browser: Capacitor's web view opens the system's picker for it.
       list: desktopFiles?.list,
       read: desktopFiles

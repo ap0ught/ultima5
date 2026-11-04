@@ -9,6 +9,7 @@
  */
 
 import { charKey, chooseCharacter, MAX_CHARACTERS, newCharacter } from './characters.ts';
+import { DEFAULT_APPEARANCE, FIGURES, SKIN, type Appearance } from './appearance.ts';
 import type { Game } from './game.ts';
 import { choose, showText, wrap } from './menu.ts';
 import { loadOptions, normaliseOptions, saveOptions, type Options } from './settings.ts';
@@ -38,6 +39,8 @@ export interface Transfer {
    * or null when they chose no place for it. Absent where no file can be written.
    */
   save?: ((text: string, name: string) => Promise<string | null>) | undefined;
+  /** Saved character card image, with the save embedded in its SVG metadata. */
+  saveImage?: ((image: string, name: string) => Promise<string | null>) | undefined;
   /** Desktop JSON files already in Downloads/Ultima5, for a controller-friendly in-game chooser. */
   list?: (() => Promise<string[]>) | undefined;
   /** Read one file returned by list. */
@@ -118,6 +121,24 @@ export function exportName(when = new Date(), who = ''): string {
   return `ultima5-${name ? `${name}-` : ''}${day}-${two(when.getHours())}${two(when.getMinutes())}.json`;
 }
 
+const xml = (value: string): string => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!);
+const hex = (value: number): string => `#${value.toString(16).padStart(6, '0')}`;
+
+/** A portable character card: an SVG portrait and labels, with the complete JSON save in base64 metadata. */
+export function characterImage(text: string, when = new Date()): string {
+  const save = parseSave(text);
+  const look: Appearance = save.appearance ?? DEFAULT_APPEARANCE;
+  const name = avatarName(save) || 'The nameless';
+  const figure = FIGURES[look.figure]?.name ?? FIGURES[0].name;
+  const skin = SKIN[look.skin] ?? SKIN[DEFAULT_APPEARANCE.skin];
+  const savedAt = new Date(save.written || when.getTime()).toLocaleString();
+  const encoded = btoa(unescape(encodeURIComponent(text)));
+  const face = hex(skin[0]);
+  const shade = hex(skin[2]);
+  const clothes = ['#344e86', '#6b3d91', '#3c7a55', '#8a3d3d', '#78602c'][look.figure] ?? '#344e86';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480"><metadata id="ultima5-save" data-format="ultima5-json-base64">${encoded}</metadata><rect width="640" height="480" fill="#171522"/><rect x="24" y="24" width="592" height="432" rx="16" fill="#29243b" stroke="#d7b56d" stroke-width="4"/><text x="320" y="72" fill="#f4d99b" font-family="sans-serif" font-size="34" text-anchor="middle" font-weight="bold">${xml(name)}</text><text x="320" y="108" fill="#c8bfd8" font-family="sans-serif" font-size="20" text-anchor="middle">${xml(figure)}</text><g shape-rendering="crispEdges"><path fill="${clothes}" d="M220 395v-95h55v-55h90v55h55v95z"/><rect fill="${face}" x="270" y="150" width="100" height="105"/><path fill="${shade}" d="M270 215h100v40H270z"/><path fill="#211b24" d="M260 145h120v28H260zM275 130h90v20h-90z"/><rect fill="#171522" x="290" y="190" width="14" height="14"/><rect fill="#171522" x="336" y="190" width="14" height="14"/><rect fill="#d7b56d" x="306" y="225" width="28" height="8"/><rect fill="#d7b56d" x="310" y="300" width="20" height="80"/></g><text x="320" y="430" fill="#c8bfd8" font-family="sans-serif" font-size="18" text-anchor="middle">Saved ${xml(savedAt)}</text></svg>`;
+}
+
 /** A character, as a list of them names each: the Avatar's name ("Shalom"). */
 const nameOf = (c: Character): string => avatarName(c.data) || 'The nameless';
 
@@ -150,6 +171,7 @@ export async function exportGame(g: Game): Promise<void> {
     [
       { label: 'To the clipboard', note: 'To paste into Import on another browser or device.' },
       ...(t.save ? [{ label: 'To a file', note: `Saved as ${fileName}.` }] : []),
+      ...(t.saveImage ? [{ label: 'As a character image', note: 'A portrait card with the save embedded in its metadata.' }] : []),
     ],
     0,
     true,
@@ -167,6 +189,13 @@ export async function exportGame(g: Game): Promise<void> {
       if (name !== null) await say(g, 'Export', `The game is saved as ${name}.`); // null: no place chosen
     } catch {
       await say(g, 'Export', 'A file could not be saved here.');
+    }
+  } else if (where === (t.save ? 2 : 1) && t.saveImage) {
+    try {
+      const name = await t.saveImage(characterImage(text), fileName.replace(/\.json$/, '.svg'));
+      if (name !== null) await say(g, 'Export', `The character image is saved as ${name}.`);
+    } catch {
+      await say(g, 'Export', 'The character image could not be saved here.');
     }
   }
 }
