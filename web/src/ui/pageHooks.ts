@@ -205,8 +205,8 @@ async function saveFile(text: string, name: string): Promise<string> {
 
 /** Render the active party with the engine's StandardArt figures into a portable SVG card. */
 async function engineCharacterImage(g: Game, screen: Screen, text: string): Promise<string> {
-  const art = screen.standardArt;
-  if (!art) throw new Error('Character image export requires the Standard tile set');
+  const art = screen.characterArt;
+  if (!art) throw new Error('Character image export requires the game character art to be loaded');
   const save = parseSave(text);
   const label = avatarName(save) || 'The nameless';
   const members = partyFigures(g, true);
