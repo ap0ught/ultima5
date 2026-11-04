@@ -311,7 +311,7 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
   const columns = members.length <= 3 ? Math.max(1, members.length) : members.length === 4 ? 2 : 3;
   const rows = Math.ceil(members.length / columns);
   const columnWidth = card.width / columns;
-  const rowTop = (row: number): number => (rows === 1 ? 170 : 45 + row * 245);
+  const rowTop = (row: number): number => (rows === 1 ? 170 : 130 + row * 200);
   const fitCentered = (value: string, center: number, y: number, maxWidth: number, font: string): void => {
     ctx.font = font;
     let size = Number(font.match(/\d+/)?.[0] ?? 14);
