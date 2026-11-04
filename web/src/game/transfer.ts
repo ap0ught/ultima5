@@ -89,7 +89,13 @@ function importIdentity(text: string): string {
       }
       return value;
     };
-    return JSON.stringify(sort(JSON.parse(mendImport(text).trim())));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text.trim());
+    } catch {
+      parsed = JSON.parse(mendImport(text).trim());
+    }
+    return JSON.stringify(sort(parsed));
   } catch {
     return text.trim();
   }

@@ -52,6 +52,12 @@ describe('PNG save imports', () => {
     const files = await uniqueImportFiles(['first.json', 'same.png', 'different.json'], async (name) => name === 'different.json' ? '{"a":9,"b":2}' : save);
     expect(files).toEqual(['first.json', 'different.json']);
   });
+  it('keeps literal nonbreaking spaces distinct from ordinary spaces when deduplicating', async () => {
+    const files = await uniqueImportFiles(['nbsp.json', 'space.json', 'escaped.json'], async (name) =>
+      name === 'space.json' ? '{"journal":"a b"}' : name === 'escaped.json' ? '{"journal":"a\\u00a0b"}' : '{"journal":"a b"}',
+    );
+    expect(files).toEqual(['nbsp.json', 'space.json']);
+  });
 });
 
 function page(over: Partial<Transfer> = {}): Transfer & { copied: string[]; saved: [string, string][] } {

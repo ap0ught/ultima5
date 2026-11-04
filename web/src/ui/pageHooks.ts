@@ -10,7 +10,8 @@
 import type { Game } from '../game/game.ts';
 import { LOST_FOCUS, Pad } from '../game/io.ts';
 import { effectsOf, saveOptions, soundtrackOf, type Options } from '../game/settings.ts';
-import { avatarName, parseSave } from '../game/storage.ts';
+import { avatarName, fromBase64, parseSave } from '../game/storage.ts';
+import { Save } from '../game/save.ts';
 import { partyFigures } from '../game/world.ts';
 import { clearInstalled } from '../install/store.ts';
 import { GamepadInput } from './gamepad.ts';
@@ -18,7 +19,7 @@ import type { CapacitorLike } from './platform.ts';
 import { mapKey, showMap } from './mapView.ts';
 import { menuUp } from './pageMenu.ts';
 import { ScanlineOverlay } from './scanlines.ts';
-import { addressedAsLady } from '../game/appearance.ts';
+import { addressedAsLady, validAppearance } from '../game/appearance.ts';
 import { handsOf } from '../game/switchWeapon.ts';
 import { CELL } from './standardArt.ts';
 import type { Screen } from './screen.ts';
@@ -268,6 +269,10 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
   if (!art) throw new Error('Character image export requires the game character art to be loaded');
   const save = parseSave(text);
   const label = avatarName(save) || 'The nameless';
+  const imageGame = Object.create(g) as Game;
+  imageGame.s = new Save(fromBase64(save.save));
+  imageGame.appearance = validAppearance(save.appearance);
+  imageGame.companionLooks = new Map(Object.entries(save.companions ?? {}));
   const classNames: Record<string, string> = {
     A: 'Avatar',
     M: 'Mage',
@@ -280,8 +285,8 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
     S: 'Shepherd',
   };
   const itemNames = g.data.table(0x17f6, 0x30);
-  const members = partyFigures(g, true);
-  const saveMembers = g.s.members.slice(0, g.s.partySize);
+  const members = partyFigures(imageGame, true);
+  const saveMembers = imageGame.s.members.slice(0, imageGame.s.partySize);
   const memberNames = saveMembers.map((member) => member.name?.trim() || 'Unnamed');
   const card = document.createElement('canvas');
   card.width = 800;
@@ -304,32 +309,38 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
   cell.width = CELL;
   cell.height = CELL;
   const cellCtx = cell.getContext('2d') as CanvasRenderingContext2D;
-  members.forEach((member, i) => {
-    screen.draw.dressAs?.(member.dress ?? null);
-    const pixels = art.figure(member.tile);
+  try {
+    g.draw.avatar?.(imageGame.appearance, addressedAsLady(imageGame));
+    members.forEach((member, i) => {
+      screen.draw.dressAs?.(member.dress ?? null);
+      const pixels = art.figure(member.tile);
+      screen.draw.dressAs?.(null);
+      cellCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), CELL, CELL), 0, 0);
+      const x = 120 + (i % 4) * 150;
+      const y = 170 + Math.floor(i / 4) * 180;
+      ctx.drawImage(cell, x, y, 128, 128);
+      ctx.fillStyle = '#c8bfd8';
+      ctx.font = '18px sans-serif';
+      ctx.fillText(memberNames[i] ?? `Member ${i + 1}`, x + 64, y + 154);
+      ctx.font = '14px sans-serif';
+      const saveMember = saveMembers[i];
+      const cls = classNames[String.fromCharCode(saveMember?.cls ?? 0)] ?? 'Unknown';
+      ctx.fillText(`${cls} · Level ${saveMember?.level ?? '?'}`, x + 64, y + 174);
+      const held = saveMember
+        ? handsOf(imageGame, i)
+            .map((item) => (itemNames[item] ?? '').replace(/^[*!(].*?\s?/, '').trim())
+            .filter(Boolean)
+        : [];
+      ctx.fillText(`Holding: ${held.length ? held.join(', ') : 'Nothing'}`, x + 64, y + 194);
+    });
+    const savedAt = new Date(save.written).toLocaleString();
+    ctx.fillText(`Saved ${savedAt}`, 400, 560);
+    const png = card.toDataURL('image/png');
+    return pngWithSave(png, text);
+  } finally {
     screen.draw.dressAs?.(null);
-    cellCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), CELL, CELL), 0, 0);
-    const x = 120 + (i % 4) * 150;
-    const y = 170 + Math.floor(i / 4) * 180;
-    ctx.drawImage(cell, x, y, 128, 128);
-    ctx.fillStyle = '#c8bfd8';
-    ctx.font = '18px sans-serif';
-    ctx.fillText(memberNames[i] ?? `Member ${i + 1}`, x + 64, y + 154);
-    ctx.font = '14px sans-serif';
-    const saveMember = saveMembers[i];
-    const cls = classNames[String.fromCharCode(saveMember?.cls ?? 0)] ?? 'Unknown';
-    ctx.fillText(`${cls} · Level ${saveMember?.level ?? '?'}`, x + 64, y + 174);
-    const held = saveMember
-      ? handsOf(g, i)
-          .map((item) => (itemNames[item] ?? '').replace(/^[*!(].*?\s?/, '').trim())
-          .filter(Boolean)
-      : [];
-    ctx.fillText(`Holding: ${held.length ? held.join(', ') : 'Nothing'}`, x + 64, y + 194);
-  });
-  const savedAt = new Date(save.written).toLocaleString();
-  ctx.fillText(`Saved ${savedAt}`, 400, 560);
-  const png = card.toDataURL('image/png');
-  return pngWithSave(png, text);
+    g.draw.avatar?.(g.appearance, addressedAsLady(g));
+  }
 }
 
 /** The Android app's GameFolder plugin, its half for Export (mobile/.../GameFolderPlugin.java saveFile). */
@@ -469,11 +480,13 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       // The Android app's web view downloads nothing: there the app saves the file itself (androidSave). A web view
       // without that offers the clipboard only.
       save: native ? androidSave((window as { Capacitor?: unknown }).Capacitor) ?? undefined : saveFile,
-      saveImage: async (text, name) => {
-        const image = await engineCharacterImage(g, screen, text);
-        const saved = await saveFile(image, name);
-        return saved;
-      },
+      saveImage: native
+        ? undefined
+        : async (text, name) => {
+            const image = await engineCharacterImage(g, screen, text);
+            const saved = await saveFile(image, name);
+            return saved;
+          },
       // A file input works in the Android app as in a browser: Capacitor's web view opens the system's picker for it.
       list: desktopFiles?.list,
       read: desktopFiles
