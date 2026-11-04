@@ -13,7 +13,8 @@ function buildVersion() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
   const day = `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}`;
-  return `${series}.0-dev.${day}.${p(d.getUTCHours())}${p(d.getUTCMinutes())}`;
+  const minute = d.getUTCHours() * 60 + d.getUTCMinutes();
+  return `${series}.0-dev.${day}.${minute}`;
 }
 
 /**
