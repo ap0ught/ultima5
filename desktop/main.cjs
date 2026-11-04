@@ -66,10 +66,12 @@ const exportDir = () => {
 };
 const reservedExports = new Set();
 function reserveExportName(name) {
-  if (typeof name !== 'string' || basename(name) !== name || !/^.+\.[A-Za-z0-9]+$/.test(name)) return null;
+  if (typeof name !== 'string' || basename(name) !== name) return null;
   const match = name.match(/^(.*)(\.[A-Za-z0-9]+)$/);
   if (!match) return null;
   const [, stem, ext] = match;
+  const normalizedExt = ext.toLowerCase();
+  if (normalizedExt !== '.json' && normalizedExt !== '.png') return null;
   for (let suffix = 0; suffix < 100_000; suffix++) {
     const candidate = suffix ? `${stem} (${suffix})${ext}` : name;
     try {
