@@ -94,7 +94,10 @@ export function onMonsterSide(g: Game, i: number): boolean {
   const c = g.combat[i];
   if (c.flags & CF.Dead) return false;
   if (c.flags & CF.Player) {
-    if (c.who !== 0 && g.s.members[c.who].name[4] === 'j') return true;
+    const member = g.s.members[c.who];
+    // A stale combat slot can briefly outlive the party member it referenced while leaving combat.
+    if (!member) return true;
+    if (c.who !== 0 && member.name[4] === 'j') return true;
     return (c.flags & CF.Charmed) !== 0;
   }
   return (c.flags & CF.Charmed) === 0;
@@ -3557,8 +3560,9 @@ export function drawCombatMarks(g: Game): void {
   const standard = g.options.tileSet === 'standard' && d.marker !== undefined;
   s.blink = s.blink ? 0 : 1;
   const c = g.combat[s.combatTurn];
-  // In the colour of the member's bar in the party panel: their state's, else their hit points', else white.
-  if (standard && s.combatTurn !== 0xff && !onMonsterSide(g, s.combatTurn)) d.marker!(c.x, c.y, turnColour(g, c.who));
+  const validTurn = c !== undefined && (!(c.flags & CF.Player) || g.s.members[c.who] !== undefined);
+  // A combat slot can be stale for one frame while combat is ending; do not dereference its old member.
+  if (standard && s.combatTurn !== 0xff && validTurn && !onMonsterSide(g, s.combatTurn)) d.marker!(c.x, c.y, turnColour(g, c.who));
   // The foe an X would strike: the crosshair's mark, small (snapMark) - over the turn's outline, a foe beside them.
   const snap = marks ? snapMark(g) : -1;
   if (snap >= 0) d.aim!(g.combat[snap].x, g.combat[snap].y, 'attack', true);
