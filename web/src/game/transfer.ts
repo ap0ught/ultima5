@@ -205,7 +205,7 @@ export async function exportGame(g: Game): Promise<void> {
       await t.copyImage(text);
       await say(g, 'Export', 'The character PNG is copied to the clipboard.');
     } else if (t.saveImage) {
-      const name = await t.saveImage(text, fileName.replace(/\\.json$/, '.png'));
+      const name = await t.saveImage(text, fileName.replace(/\.json$/, '.png'));
       if (name !== null) await say(g, 'Export', `The character PNG is saved as ${name}.`);
     }
   } catch {

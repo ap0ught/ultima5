@@ -80,10 +80,10 @@ describe('exporting a game', () => {
     const saved = JSON.stringify(serialize(newGame().g));
     store.set(SAVE_KEY, saved);
     const clip = page();
-    await exportGame(title(clip, K.Enter, K.Enter).g);
+    await exportGame(title(clip, K.Enter, K.Enter, K.Enter).g);
     expect(clip.copied).toEqual([saved]);
     const file = page();
-    await exportGame(title(file, K.Down, K.Enter, K.Enter).g);
+    await exportGame(title(file, K.Down, K.Enter, K.Enter, K.Enter).g);
     expect(file.saved[0][0]).toBe(saved);
     expect(file.saved[0][1]).toMatch(/^ultima5-([A-Za-z0-9]+-)?\d{8}-\d{4}\.json$/);
   });
@@ -92,14 +92,14 @@ describe('exporting a game', () => {
     const saved = JSON.stringify(serialize(newGame().g));
     store.set(SAVE_KEY, saved);
     const json = page();
-    await exportGame(title(json, K.Down, K.Enter, K.Enter).g);
+    await exportGame(title(json, K.Down, K.Enter, K.Enter, K.Enter).g);
     expect(json.saved).toHaveLength(1);
     expect(json.saved[0][0]).toBe(saved);
     expect(json.saved[0][1]).toMatch(/\.json$/);
 
     const png: { text: string; name: string }[] = [];
     const image = page({ saveImage: async (text, name) => (png.push({ text, name }), name) });
-    await exportGame(title(image, K.Down, K.Enter, K.Down, K.Enter).g);
+    await exportGame(title(image, K.Down, K.Enter, K.Down, K.Enter, K.Enter).g);
     expect(png).toEqual([{ text: saved, name: expect.stringMatching(/\.png$/) }]);
   });
 
@@ -108,16 +108,16 @@ describe('exporting a game', () => {
     store.set(SAVE_KEY, saved);
     const png: string[] = [];
     const clip = page({ copyImage: async (text) => void png.push(text) });
-    await exportGame(title(clip, K.Enter, K.Down, K.Enter).g);
+    await exportGame(title(clip, K.Enter, K.Down, K.Enter, K.Enter).g);
     expect(clip.copied).toHaveLength(0);
     expect(png).toEqual([saved]);
   });
   it('says nothing more where the player chose no place for the file, and tells the name they chose where they did', async () => {
     store.set(SAVE_KEY, JSON.stringify(serialize(newGame().g)));
-    const none = title(page({ save: async () => null }), K.Down, K.Enter);
+    const none = title(page({ save: async () => null }), K.Down, K.Enter, K.Enter);
     await exportGame(none.g);
     expect(none.p.log).not.toContain('saved as');
-    const renamed = title(page({ save: async () => 'mine.json' }), K.Down, K.Enter, K.Enter);
+    const renamed = title(page({ save: async () => 'mine.json' }), K.Down, K.Enter, K.Enter, K.Enter);
     await exportGame(renamed.g);
     expect(renamed.p.log.replace(/\s+/g, ' ')).toContain('saved as mine.json.');
   });
@@ -145,7 +145,7 @@ describe('exporting a game', () => {
   it('offers no file where none can be written (the Android app): the clipboard is the way out', async () => {
     store.set(SAVE_KEY, JSON.stringify(serialize(newGame().g)));
     const clip = page({ save: undefined });
-    await exportGame(title(clip, K.Down, K.Enter, K.Enter).g);
+    await exportGame(title(clip, K.Down, K.Enter, K.Enter, K.Enter).g);
     expect(clip.copied).toHaveLength(1); // the only line, however far down the bar was pressed
   });
 });
