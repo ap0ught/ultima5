@@ -195,7 +195,8 @@ export async function exportGame(g: Game): Promise<void> {
         const name = await t.save(text, fileName);
         if (name !== null) await say(g, 'Export', `The saved game is saved as ${name}.`);
       }
-    } catch {
+    } catch (error) {
+      console.error('save export failed', error);
       await say(g, 'Export', destination === 0 ? 'The clipboard is not available here.' : 'A file could not be saved here.');
     }
     return;
@@ -208,7 +209,8 @@ export async function exportGame(g: Game): Promise<void> {
       const name = await t.saveImage(text, fileName.replace(/\.json$/, '.png'));
       if (name !== null) await say(g, 'Export', `The character PNG is saved as ${name}.`);
     }
-  } catch {
+  } catch (error) {
+    console.error('character image export failed', error);
     await say(g, 'Export', destination === 0 ? 'The character PNG could not be copied here.' : 'The character PNG could not be saved here.');
   }
 }

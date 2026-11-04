@@ -138,6 +138,23 @@ describe('exporting a game', () => {
     expect(await save('{"save":1}', 'ultima5-20260926-1405.json')).toBeNull();
   });
 
+  it("uses the Electron desktop binary bridge with the PNG bytes, not the browser download path", async () => {
+    const { desktopSave } = await import('../src/ui/pageHooks.ts');
+    const calls: { name: string; bytes: Uint8Array }[] = [];
+    const save = desktopSave({
+      reserve: async (name) => `${name.replace('.png', '')} (1).png`,
+      write: async (name, bytes) => {
+        calls.push({ name, bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes) });
+        return name;
+      },
+    });
+    expect(save).not.toBeNull();
+    expect(await save!(new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }), 'ultima5-Jarek.png')).toBe(
+      'ultima5-Jarek (1).png',
+    );
+    expect(calls).toEqual([{ name: 'ultima5-Jarek (1).png', bytes: new Uint8Array([137, 80, 78, 71]) }]);
+  });
+
   it("tells the file's name whole, broken after a hyphen where the panel is too narrow for it", () => {
     expect(wrap('The game is saved as ultima5-20260926-1032.json.')).toEqual(['The game is saved as', 'ultima5-20260926-', '1032.json.']);
   });

@@ -231,11 +231,22 @@ app.whenReady().then(() => {
   const fromGame = (event) => String(event.senderFrame?.url ?? '').startsWith('app://');
   ipcMain.handle('reserve-export-file', (event, name) => (fromGame(event) ? reserveExportName(name) : null));
   ipcMain.handle('write-export-file', (event, name, bytes) => {
-    if (!fromGame(event) || typeof name !== 'string' || !reservedExports.has(name)) return null;
-    if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) return null;
-    writeFileSync(join(exportDir(), name), Buffer.from(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes));
-    reservedExports.delete(name);
-    return name;
+    if (!fromGame(event) || typeof name !== 'string' || !reservedExports.has(name)) {
+      console.error('write-export-file rejected', { name, reserved: typeof name === 'string' && reservedExports.has(name) });
+      return null;
+    }
+    if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) {
+      console.error('write-export-file received non-binary data', { name, type: typeof bytes });
+      return null;
+    }
+    try {
+      writeFileSync(join(exportDir(), name), Buffer.from(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes));
+      reservedExports.delete(name);
+      return name;
+    } catch (error) {
+      console.error('write-export-file failed', name, error);
+      return null;
+    }
   });
   const updatesFile = join(app.getPath('userData'), 'updates.json');
   ipcMain.handle('update-offer', (event) => (fromGame(event) ? currentOffer() : null));

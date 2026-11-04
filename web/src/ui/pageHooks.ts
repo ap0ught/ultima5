@@ -210,16 +210,29 @@ function pickFile(): Promise<string> {
   });
 }
 
-/** `text` saved as a file named `name`, by the browser's download. */
-async function saveFile(contents: string | Blob, name: string): Promise<string> {
-  const native = (window as { u5native?: { exports?: { reserve: (name: string) => Promise<string | null>; write?: (name: string, bytes: ArrayBuffer) => Promise<string | null> } } }).u5native?.exports;
-  if (native?.write && contents instanceof Blob) {
+type DesktopExports = {
+  reserve: (name: string) => Promise<string | null>;
+  write?: (name: string, bytes: ArrayBuffer | Uint8Array) => Promise<string | null>;
+};
+
+/** The Electron bridge's binary path, kept separate so the desktop path is testable without a browser download. */
+export function desktopSave(native: DesktopExports | undefined): ((contents: Blob, name: string) => Promise<string>) | null {
+  const write = native?.write;
+  if (!write) return null;
+  return async (contents, name) => {
     const actualName = await native.reserve(name);
     if (!actualName) throw new Error('No unused export filename is available');
-    const saved = await native.write(actualName, await contents.arrayBuffer());
-    if (!saved) throw new Error('The image could not be written');
-    return saved;
-  }
+    const written = await write(actualName, new Uint8Array(await contents.arrayBuffer()));
+    if (!written) throw new Error('The image could not be written');
+    return written;
+  };
+}
+
+/** `text` saved as a file named `name`, by the browser's download. */
+async function saveFile(contents: string | Blob, name: string): Promise<string> {
+  const native = (window as { u5native?: { exports?: DesktopExports } }).u5native?.exports;
+  const desktop = contents instanceof Blob ? desktopSave(native) : null;
+  if (desktop && contents instanceof Blob) return desktop(contents, name);
   const actualName = native ? await native.reserve(name) : name;
   if (!actualName) throw new Error('No unused export filename is available');
   const type = name.endsWith('.png') ? 'image/png' : name.endsWith('.svg') ? 'image/svg+xml' : 'application/json';
@@ -453,10 +466,10 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       },
       // The Android app's web view downloads nothing: there the app saves the file itself (androidSave). A web view
       // without that offers the clipboard only.
-      save: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
+      save: native ? androidSave((window as { Capacitor?: unknown }).Capacitor) ?? undefined : saveFile,
       saveImage: async (text, name) => {
         const image = await engineCharacterImage(g, screen, text);
-        const saved = native ? null : await saveFile(image, name);
+        const saved = await saveFile(image, name);
         if (saved) showCharacterImage(image, saved);
         return saved;
       },
