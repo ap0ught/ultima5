@@ -9,7 +9,7 @@
  * one that rests off it - a stick that drifts, or a trigger, which some pads report as an axis that rests at -1 -
  * would otherwise hold a way, or a turn, for as long as the pad is plugged in. The right stick is read only in the
  * standard mapping, the one that says which axes it is. Read at every refresh of the display; or, where reading is
- * lazy (Battery saver), only while a pad is connected - none, no reading at all, till the browser says one is.
+ * lazy (Battery saver), only while a pad is connected - otherwise, probe for a connection once a second.
  */
 
 import { K, Pad, TURN_LEFT, TURN_RIGHT } from '../game/io.ts';
@@ -86,10 +86,11 @@ export class GamepadInput {
 
   /** Retry discovery without restoring full-rate rendering while Battery saver is idle. */
   private probeConnection(): void {
-    if (this.connectionProbe !== undefined || !this.lazy() || this.connected()) return;
+    if (this.connectionProbe !== undefined || !this.lazy() || typeof navigator.getGamepads !== 'function') return;
     this.connectionProbe = setTimeout(() => {
       this.connectionProbe = undefined;
-      this.wake();
+      if (!this.lazy() || this.connected()) this.wake();
+      else this.probeConnection();
     }, CONNECTION_PROBE_MS);
   }
 

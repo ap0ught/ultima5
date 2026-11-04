@@ -100,17 +100,97 @@ describe('a gamepad read lazily', () => {
     const f = frames();
     let pads: ReturnType<typeof padOf>[] = [];
     vi.stubGlobal('navigator', { getGamepads: () => pads });
+    const sent: number[] = [];
     new GamepadInput(
-      () => undefined,
+      (code) => sent.push(code),
       () => true,
     );
     f.next(); // the first read, finding none
     expect(f.queued).toBe(0);
     pads = [padOf('standard', [0, 0, 0, 0])];
+    pads[0].buttons[0].pressed = true;
+    vi.advanceTimersByTime(999);
+    expect(f.queued).toBe(0);
+    vi.advanceTimersByTime(1); // the connection event was missed
+    expect(f.queued).toBe(1);
+    f.next();
+    expect(sent).toEqual([0x100]);
+    expect(f.queued).toBe(1); // connected: normal refresh polling resumes
+    expect(vi.getTimerCount()).toBe(0);
+
+    pads = [];
+    f.next();
+    expect(f.queued).toBe(0);
+    pads = [padOf('standard', [0, 0, 0, 0])];
     vi.advanceTimersByTime(1000); // the connection event was missed
     expect(f.queued).toBe(1);
     f.next();
-    expect(f.queued).toBe(1); // connected: normal refresh polling resumes
+    pads[0].buttons[1].pressed = true;
+    f.next();
+    expect(sent).toEqual([0x100, 0x101]);
+  });
+
+  it('keeps probing once a second without requesting idle frames', () => {
+    const f = frames();
+    const getGamepads = vi.fn(() => [null, { ...padOf('standard', []), connected: false }]);
+    vi.stubGlobal('navigator', { getGamepads });
+    new GamepadInput(
+      () => undefined,
+      () => true,
+    );
+    f.next();
+    getGamepads.mockClear();
+
+    for (let i = 0; i < 3; i++) {
+      vi.advanceTimersByTime(1000);
+      expect(getGamepads).toHaveBeenCalledTimes(i + 1);
+      expect(f.queued).toBe(0);
+      expect(vi.getTimerCount()).toBe(1);
+    }
+  });
+
+  it('wakes immediately on a connection event and cancels the idle probe', () => {
+    const f = frames();
+    let pads: ReturnType<typeof padOf>[] = [];
+    let connected = () => undefined;
+    vi.stubGlobal('addEventListener', (event: string, listener: () => undefined) => {
+      if (event === 'gamepadconnected') connected = listener;
+    });
+    vi.stubGlobal('navigator', { getGamepads: () => pads });
+    new GamepadInput(
+      () => undefined,
+      () => true,
+    );
+    f.next();
+    expect(vi.getTimerCount()).toBe(1);
+
+    pads = [padOf('standard', [0, 0, 0, 0])];
+    connected();
+    connected();
+    expect(f.queued).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(1000);
+    expect(f.queued).toBe(1);
+    f.next();
+    expect(f.queued).toBe(1);
+  });
+
+  it('resumes normal polling when Battery saver is disabled during an idle probe', () => {
+    const f = frames();
+    let lazy = true;
+    vi.stubGlobal('navigator', { getGamepads: () => [] });
+    new GamepadInput(
+      () => undefined,
+      () => lazy,
+    );
+    f.next();
+
+    lazy = false;
+    vi.advanceTimersByTime(1000);
+    expect(f.queued).toBe(1);
+    f.next();
+    expect(f.queued).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('reads at every refresh, pad or none, where it is not lazy', () => {
@@ -122,6 +202,7 @@ describe('a gamepad read lazily', () => {
     );
     for (let i = 0; i < 3; i++) f.next();
     expect(f.queued).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('reads an indexed pad list and array-like buttons and axes', () => {
@@ -137,7 +218,10 @@ describe('a gamepad read lazily', () => {
     let pads = indexed([null, disconnected]);
     vi.stubGlobal('navigator', { getGamepads: () => pads });
     const sent: number[] = [];
-    const input = new GamepadInput((code) => sent.push(code), () => true);
+    const input = new GamepadInput(
+      (code) => sent.push(code),
+      () => true,
+    );
 
     f.next();
     expect(f.queued).toBe(0);
@@ -157,10 +241,16 @@ describe('a gamepad read lazily', () => {
   it('stays idle when the browser has no Gamepad API', () => {
     const f = frames();
     vi.stubGlobal('navigator', {});
-    new GamepadInput(() => undefined, () => true);
+    new GamepadInput(
+      () => undefined,
+      () => true,
+    );
 
     f.next();
 
     expect(f.queued).toBe(0);
+    vi.advanceTimersByTime(3000);
+    expect(f.queued).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
