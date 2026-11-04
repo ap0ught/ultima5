@@ -42,6 +42,30 @@ function recall(key: string): string | null {
   }
 }
 
+function showCharacterImage(image: Blob, fileName: string): void {
+  const back = document.createElement('div');
+  back.style.cssText = 'position:fixed;inset:0;z-index:35;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box;';
+  const box = document.createElement('div');
+  box.style.cssText = 'max-width:min(92vw,820px);max-height:94vh;background:#000;border:3px solid #b5693a;padding:10px;color:#fff;font:16px monospace;text-align:center;';
+  const imageElement = document.createElement('img');
+  imageElement.src = URL.createObjectURL(image);
+  imageElement.alt = 'Exported Ultima V character group';
+  imageElement.style.cssText = 'display:block;max-width:100%;max-height:78vh;image-rendering:pixelated;';
+  const caption = document.createElement('div');
+  caption.textContent = `${fileName} — A/B: close`;
+  caption.style.marginTop = '8px';
+  box.append(imageElement, caption);
+  back.appendChild(box);
+  const close = (): void => {
+    pageBox = null;
+    URL.revokeObjectURL(imageElement.src);
+    back.remove();
+  };
+  back.addEventListener('click', close);
+  pageBox = () => close();
+  document.body.appendChild(back);
+}
+
 /**
  * The page's own box, while one is up (a line of text, a dialog): a controller's A and B answer it - OK and Cancel -
  * as they answer the game's own boxes, and its other buttons are held from the game until it goes.
@@ -420,7 +444,9 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       save: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
       saveImage: async (text, name) => {
         const image = await engineCharacterImage(g, screen, text);
-        return native ? null : saveFile(image, name);
+        const saved = native ? null : await saveFile(image, name);
+        if (saved) showCharacterImage(image, saved);
+        return saved;
       },
       // A file input works in the Android app as in a browser: Capacitor's web view opens the system's picker for it.
       list: desktopFiles?.list,
