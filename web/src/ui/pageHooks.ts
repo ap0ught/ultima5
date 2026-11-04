@@ -10,6 +10,8 @@
 import type { Game } from '../game/game.ts';
 import { LOST_FOCUS, Pad } from '../game/io.ts';
 import { effectsOf, saveOptions, soundtrackOf, type Options } from '../game/settings.ts';
+import { avatarName, parseSave } from '../game/storage.ts';
+import { partyFigures } from '../game/world.ts';
 import { clearInstalled } from '../install/store.ts';
 import { GamepadInput } from './gamepad.ts';
 import type { CapacitorLike } from './platform.ts';
@@ -189,7 +191,8 @@ async function saveFile(text: string, name: string): Promise<string> {
   const native = (window as { u5native?: { exports?: { reserve: (name: string) => Promise<string | null> } } }).u5native?.exports;
   const actualName = native ? await native.reserve(name) : name;
   if (!actualName) throw new Error('No unused export filename is available');
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const type = name.endsWith('.svg') ? 'image/svg+xml' : 'application/json';
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement('a');
   a.href = url;
   a.download = actualName;
@@ -198,6 +201,54 @@ async function saveFile(text: string, name: string): Promise<string> {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
   return actualName;
+}
+
+/** Render the active party with the engine's StandardArt figures into a portable SVG card. */
+async function engineCharacterImage(g: Game, screen: Screen, text: string): Promise<string> {
+  const art = screen.standardArt;
+  if (!art) throw new Error('Character image export requires the Standard tile set');
+  const save = parseSave(text);
+  const label = avatarName(save) || 'The nameless';
+  const members = partyFigures(g, true);
+  const memberNames = g.s.members.slice(0, g.s.partySize).map((member) => member.name?.trim() || 'Unnamed');
+  const card = document.createElement('canvas');
+  card.width = 800;
+  card.height = 600;
+  const ctx = card.getContext('2d') as CanvasRenderingContext2D;
+  ctx.fillStyle = '#171522';
+  ctx.fillRect(0, 0, card.width, card.height);
+  ctx.strokeStyle = '#d7b56d';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(18, 18, card.width - 36, card.height - 36);
+  ctx.fillStyle = '#f4d99b';
+  ctx.font = 'bold 42px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, 400, 72);
+  ctx.fillStyle = '#c8bfd8';
+  ctx.font = '24px sans-serif';
+  ctx.fillText(`${members.length} party members`, 400, 108);
+  ctx.imageSmoothingEnabled = false;
+  const cell = document.createElement('canvas');
+  cell.width = 32;
+  cell.height = 32;
+  const cellCtx = cell.getContext('2d') as CanvasRenderingContext2D;
+  members.forEach((member, i) => {
+    screen.draw.dressAs?.(member.dress ?? null);
+    const pixels = art.figure(member.tile);
+    screen.draw.dressAs?.(null);
+    cellCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), 32, 32), 0, 0);
+    const x = 120 + (i % 4) * 150;
+    const y = 170 + Math.floor(i / 4) * 180;
+    ctx.drawImage(cell, x, y, 128, 128);
+    ctx.fillStyle = '#c8bfd8';
+    ctx.font = '18px sans-serif';
+    ctx.fillText(memberNames[i] ?? `Member ${i + 1}`, x + 64, y + 154);
+  });
+  const savedAt = new Date(save.written).toLocaleString();
+  ctx.fillText(`Saved ${savedAt}`, 400, 560);
+  const png = card.toDataURL('image/png');
+  const encoded = btoa(unescape(encodeURIComponent(text)));
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><metadata id="ultima5-save" data-format="ultima5-json-base64">${encoded}</metadata><image href="${png}" width="800" height="600"/></svg>`;
 }
 
 /** The Android app's GameFolder plugin, its half for Export (mobile/.../GameFolderPlugin.java saveFile). */
@@ -332,7 +383,11 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       // The Android app's web view downloads nothing: there the app saves the file itself (androidSave). A web view
       // without that offers the clipboard only.
       save: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
-      saveImage: (native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile) ?? undefined,
+      saveImage: async (text, name) => {
+        const image = await engineCharacterImage(g, screen, text);
+        const save = native ? androidSave((window as { Capacitor?: unknown }).Capacitor) : saveFile;
+        return save ? save(image, name) : null;
+      },
       // A file input works in the Android app as in a browser: Capacitor's web view opens the system's picker for it.
       list: desktopFiles?.list,
       read: desktopFiles

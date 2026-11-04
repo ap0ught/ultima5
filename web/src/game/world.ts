@@ -633,13 +633,13 @@ export function animateParty(): void {
  * The living members as they are drawn on the map, in marching order (the dead are left out): each class's figure as
  * a fight draws it - the Avatar's the walking Avatar - in the frame of their walk, in the tint of their state.
  */
-export function partyFigures(g: Game): Figure[] {
+export function partyFigures(g: Game, includeDead = false): Figure[] {
   const s = g.s;
   const classTiles = g.data.bytes(0x1ade, 9);
   const out: Figure[] = [];
   for (let m = 0; m < s.partySize; m++) {
     const p = s.members[m];
-    if (p.status === Status.Dead) continue;
+    if (!includeDead && p.status === Status.Dead) continue;
     const cls = CLASSES.indexOf(String.fromCharCode(p.cls));
     const tile = (classTiles[Math.max(0, cls)] & 0xfc) + partyFrames[out.length % partyFrames.length];
     out.push({ tile: 0x100 + tile, tint: FIGURE_TINT[p.status] ?? 0, dress: dressingOf(g, m) });

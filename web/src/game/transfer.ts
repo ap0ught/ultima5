@@ -192,7 +192,7 @@ export async function exportGame(g: Game): Promise<void> {
     }
   } else if (where === (t.save ? 2 : 1) && t.saveImage) {
     try {
-      const name = await t.saveImage(characterImage(text), fileName.replace(/\.json$/, '.svg'));
+      const name = await t.saveImage(text, fileName.replace(/\.json$/, '.svg'));
       if (name !== null) await say(g, 'Export', `The character image is saved as ${name}.`);
     } catch {
       await say(g, 'Export', 'The character image could not be saved here.');
