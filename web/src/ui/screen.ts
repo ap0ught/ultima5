@@ -1260,8 +1260,9 @@ export class Screen implements Platform {
   private tint = 0;
 
   /** Character art for export, regardless of which display look is currently selected. */
-  get characterArt(): StandardArt | null {
-    return this.standard;
+  get characterArt(): { figure: (tile: number) => Uint32Array } | null {
+    const art = this.fb.art;
+    return art.figure ? { figure: art.figure.bind(art) } : null;
   }
 
   /** The Standard tile art if that is the set in use, for what is drawn outside the screen (the land map). */

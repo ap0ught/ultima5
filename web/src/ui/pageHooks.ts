@@ -21,7 +21,6 @@ import { menuUp } from './pageMenu.ts';
 import { ScanlineOverlay } from './scanlines.ts';
 import { addressedAsLady, validAppearance } from '../game/appearance.ts';
 import { handsOf } from '../game/switchWeapon.ts';
-import { CELL } from './standardArt.ts';
 import type { Screen } from './screen.ts';
 import type { PcSound } from './sound.ts';
 import { fullScreen } from './fullScreen.ts';
@@ -287,7 +286,7 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
   const itemNames = g.data.table(0x17f6, 0x30);
   const members = partyFigures(imageGame, true);
   const saveMembers = imageGame.s.members.slice(0, imageGame.s.partySize);
-  const memberNames = saveMembers.map((member) => member.name?.trim() || 'Unnamed');
+  const memberNames = saveMembers.map((member, i) => member.name?.trim() || (i === 0 ? label : 'Unnamed'));
   const card = document.createElement('canvas');
   card.width = 800;
   card.height = 600;
@@ -306,32 +305,43 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
   ctx.fillText(`${members.length} party members`, 400, 108);
   ctx.imageSmoothingEnabled = false;
   const cell = document.createElement('canvas');
-  cell.width = CELL;
-  cell.height = CELL;
+  const pixelsSide = Math.sqrt(art.figure(0).length);
+  cell.width = pixelsSide;
+  cell.height = pixelsSide;
   const cellCtx = cell.getContext('2d') as CanvasRenderingContext2D;
+  const columnWidth = card.width / Math.max(1, members.length);
+  const fitCentered = (value: string, center: number, y: number, maxWidth: number, font: string): void => {
+    ctx.font = font;
+    let size = Number(font.match(/\d+/)?.[0] ?? 14);
+    while (ctx.measureText(value).width > maxWidth && size > 10) {
+      size--;
+      ctx.font = `${size}px sans-serif`;
+    }
+    ctx.fillText(value, center, y);
+  };
   try {
     g.draw.avatar?.(imageGame.appearance, addressedAsLady(imageGame));
     members.forEach((member, i) => {
       screen.draw.dressAs?.(member.dress ?? null);
       const pixels = art.figure(member.tile);
       screen.draw.dressAs?.(null);
-      cellCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), CELL, CELL), 0, 0);
-      const x = 120 + (i % 4) * 150;
+      cellCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), pixelsSide, pixelsSide), 0, 0);
+      const center = (i + 0.5) * columnWidth;
+      const x = center - 64;
       const y = 170 + Math.floor(i / 4) * 180;
       ctx.drawImage(cell, x, y, 128, 128);
       ctx.fillStyle = '#c8bfd8';
-      ctx.font = '18px sans-serif';
-      ctx.fillText(memberNames[i] ?? `Member ${i + 1}`, x + 64, y + 154);
-      ctx.font = '14px sans-serif';
+      fitCentered(memberNames[i] ?? `Member ${i + 1}`, center, y + 154, columnWidth - 20, '18px sans-serif');
       const saveMember = saveMembers[i];
       const cls = classNames[String.fromCharCode(saveMember?.cls ?? 0)] ?? 'Unknown';
-      ctx.fillText(`${cls} · Level ${saveMember?.level ?? '?'}`, x + 64, y + 174);
+      ctx.fillStyle = '#d7b56d';
+      fitCentered(`${cls} · Level ${saveMember?.level ?? '?'}`, center, y + 174, columnWidth - 20, '14px sans-serif');
       const held = saveMember
         ? handsOf(imageGame, i)
-            .map((item) => (itemNames[item] ?? '').replace(/^[*!(].*?\s?/, '').trim())
+            .map((item) => (itemNames[item] ?? '').replace(/^[*!(].*?\\s?/, '').trim())
             .filter(Boolean)
         : [];
-      ctx.fillText(`Holding: ${held.length ? held.join(', ') : 'Nothing'}`, x + 64, y + 194);
+      fitCentered(`Holding: ${held.length ? held.join(', ') : 'Nothing'}`, center, y + 194, columnWidth - 20, '14px sans-serif');
     });
     const savedAt = new Date(save.written).toLocaleString();
     ctx.fillText(`Saved ${savedAt}`, 400, 560);
