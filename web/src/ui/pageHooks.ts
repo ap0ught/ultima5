@@ -19,6 +19,7 @@ import { mapKey, showMap } from './mapView.ts';
 import { menuUp } from './pageMenu.ts';
 import { ScanlineOverlay } from './scanlines.ts';
 import { addressedAsLady } from '../game/appearance.ts';
+import { handsOf } from '../game/switchWeapon.ts';
 import { CELL } from './standardArt.ts';
 import type { Screen } from './screen.ts';
 import type { PcSound } from './sound.ts';
@@ -267,8 +268,21 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
   if (!art) throw new Error('Character image export requires the game character art to be loaded');
   const save = parseSave(text);
   const label = avatarName(save) || 'The nameless';
+  const classNames: Record<string, string> = {
+    A: 'Avatar',
+    M: 'Mage',
+    B: 'Bard',
+    F: 'Fighter',
+    D: 'Druid',
+    T: 'Tinker',
+    P: 'Paladin',
+    R: 'Ranger',
+    S: 'Shepherd',
+  };
+  const itemNames = g.data.table(0x17f6, 0x30);
   const members = partyFigures(g, true);
-  const memberNames = g.s.members.slice(0, g.s.partySize).map((member) => member.name?.trim() || 'Unnamed');
+  const saveMembers = g.s.members.slice(0, g.s.partySize);
+  const memberNames = saveMembers.map((member) => member.name?.trim() || 'Unnamed');
   const card = document.createElement('canvas');
   card.width = 800;
   card.height = 600;
@@ -301,6 +315,16 @@ async function engineCharacterImage(g: Game, screen: Screen, text: string): Prom
     ctx.fillStyle = '#c8bfd8';
     ctx.font = '18px sans-serif';
     ctx.fillText(memberNames[i] ?? `Member ${i + 1}`, x + 64, y + 154);
+    ctx.font = '14px sans-serif';
+    const saveMember = saveMembers[i];
+    const cls = classNames[String.fromCharCode(saveMember?.cls ?? 0)] ?? 'Unknown';
+    ctx.fillText(`${cls} · Level ${saveMember?.level ?? '?'}`, x + 64, y + 174);
+    const held = saveMember
+      ? handsOf(g, i)
+          .map((item) => (itemNames[item] ?? '').replace(/^[*!(].*?\s?/, '').trim())
+          .filter(Boolean)
+      : [];
+    ctx.fillText(`Holding: ${held.length ? held.join(', ') : 'Nothing'}`, x + 64, y + 194);
   });
   const savedAt = new Date(save.written).toLocaleString();
   ctx.fillText(`Saved ${savedAt}`, 400, 560);
