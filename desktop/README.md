@@ -31,6 +31,15 @@ looks beside the app, at home and where GOG and the Linux launchers install
 games (folders named like `u5`, `Ultima 5` or `Ultima V™.app`, a few levels
 down), and `preload.cjs` is the page's one bridge to it.
 
+Playing Steam's Ultima V with this engine (see
+[Steam's Ultima V](../docs/install.md#steams-ultima-v)) is a few modules:
+`steam.cjs` finds Steam, the game's folder in its libraries and the
+account that launched it; `appinfo.cjs` reads and writes Steam's app cache,
+to give the game a Mac launch entry; `steamSaves.cjs` keeps a Steam
+launch's saves as `SAVED.GAM` files for Steam Cloud; `steamSetup.cjs` sets
+Steam up and takes that away again on each system; and `instanceMode.cjs`
+tells a second copy whether the open one is a Steam launch or not.
+
 Builds for all three platforms come from the "Desktop and Android builds"
 workflow under Actions. It runs when started by hand (Actions > Run
 workflow), with "publish" deciding between a release and artifacts. The
@@ -67,7 +76,14 @@ Chromium keeps the lock's socket, at a directory the instances share. The
 game offers Quit on its title menu when it sees the `app:` scheme the
 window loads it from, and quits by closing that window.
 
-Linux gets an AppImage and a Flatpak bundle. The Flatpak is built only
+Linux gets an AppImage and a Flatpak bundle. The AppImage is published as
+`ultima5-sp-<arch>.AppImage` (`appImage.artifactName`), with no version in
+the name: electron-updater then overwrites the file in place, so its path
+never changes and the Steam launch line and compatibility tool can point
+at it. It is the build the docs recommend for Steam on Linux and the Deck;
+the permanent link is `releases/latest/download/ultima5-sp-x86_64.AppImage`.
+The window title is `Ultima V SP <version>`; the page reads the version
+through `u5native.version()`. The Flatpak is built only
 where `flatpak-builder` and the Freedesktop 25.08 runtime, SDK and
 Electron base app are installed, which the Linux job does (on a Linux
 machine: `flatpak install flathub org.freedesktop.Platform//25.08

@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -106,6 +107,136 @@ describe('the desktop app’s updates', () => {
       expect(currentOffer()).toEqual({ kind: 'release', version: '1.1.13', current: '1.1.10', told: false });
     } finally {
       Object.defineProperty(process, 'platform', { value: was.platform });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('never offers a pre-release: electron-updater is told so', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'u5-updates-'));
+    const was = { platform: process.platform };
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    // electron-updater is loaded with require inside updates.cjs, so its cache entry is what gets stubbed.
+    const path = createRequire(join(process.cwd(), '../desktop/updates.cjs')).resolve('electron-updater');
+    const real = require.cache[path];
+    const autoUpdater = { allowPrerelease: true, on: () => {}, checkForUpdates: async () => null };
+    require.cache[path] = { id: path, filename: path, loaded: true, exports: { autoUpdater } } as never;
+    try {
+      const electron = { app: { isPackaged: true, getVersion: () => '1.1.10', getPath: () => dir }, net: {} };
+      await checkForUpdates({ electron, quiet: false, file: join(dir, 'updates.json') });
+      expect(autoUpdater.allowPrerelease).toBe(false);
+    } finally {
+      if (real) require.cache[path] = real;
+      else delete require.cache[path];
+      Object.defineProperty(process, 'platform', { value: was.platform });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('in a Steam launch, only install a downloaded build as the game quits: no restart into it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'u5-updates-'));
+    const was = { platform: process.platform };
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const path = createRequire(join(process.cwd(), '../desktop/updates.cjs')).resolve('electron-updater');
+    const real = require.cache[path];
+    let installs = 0;
+    let downloaded: (info: { version: string }) => void = () => {};
+    const autoUpdater = {
+      autoInstallOnAppQuit: false,
+      allowPrerelease: true,
+      on: (name: string, fn: typeof downloaded) => name === 'update-downloaded' && (downloaded = fn),
+      checkForUpdates: async () => null,
+      quitAndInstall: () => void installs++,
+    };
+    require.cache[path] = { id: path, filename: path, loaded: true, exports: { autoUpdater } } as never;
+    try {
+      const electron = { app: { isPackaged: true, getVersion: () => '1.1.10', getPath: () => dir, quit: () => {} }, net: {} };
+      await checkForUpdates({ electron, quiet: false, file: join(dir, 'updates.json'), steam: true });
+      downloaded({ version: '1.1.12' });
+      expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+      expect(currentOffer()).toEqual({ kind: 'restart', onQuit: true, version: '1.1.12', current: '1.1.10', told: false });
+      expect(applyUpdate({ electron, steam: true })).toBe(false);
+      expect(installs).toBe(0);
+      // Outside Steam the same offer restarts into the build.
+      await checkForUpdates({ electron, quiet: false, file: join(dir, 'updates.json') });
+      downloaded({ version: '1.1.12' });
+      expect(currentOffer()?.onQuit).toBeUndefined();
+      expect(applyUpdate({ electron })).toBe(true);
+      expect(installs).toBe(1);
+    } finally {
+      if (real) require.cache[path] = real;
+      else delete require.cache[path];
+      Object.defineProperty(process, 'platform', { value: was.platform });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the AppImage’s file name carries no version, so an update overwrites it in place', () => {
+    const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'desktop', 'package.json'), 'utf8')) as {
+      build: { appImage: { artifactName: string } };
+    };
+    expect(pkg.build.appImage.artifactName).toBe('ultima5-sp-${arch}.${ext}');
+    expect(pkg.build.appImage.artifactName).not.toContain('${version}');
+  });
+
+  it('register no appimage-filename-updated handler: the AppImage keeps its path', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'u5-updates-'));
+    const was = { platform: process.platform };
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    const env = { ...process.env };
+    process.env.APPIMAGE = join(dir, 'ultima5-sp-x86_64.AppImage');
+    const path = createRequire(join(process.cwd(), '../desktop/updates.cjs')).resolve('electron-updater');
+    const real = require.cache[path];
+    const handlers = new Map<string, unknown>();
+    const autoUpdater = {
+      on: (name: string, fn: unknown) => void handlers.set(name, fn),
+      checkForUpdates: async () => null,
+    };
+    require.cache[path] = { id: path, filename: path, loaded: true, exports: { autoUpdater } } as never;
+    try {
+      const electron = { app: { isPackaged: true, getVersion: () => '1.1.10', getPath: () => dir }, net: {} };
+      await checkForUpdates({ electron, quiet: false, file: join(dir, 'updates.json') });
+      expect(handlers.has('update-downloaded')).toBe(true);
+      expect([...handlers.keys()]).not.toContain('appimage-filename-updated');
+    } finally {
+      if (real) require.cache[path] = real;
+      else delete require.cache[path];
+      process.env = env;
+      Object.defineProperty(process, 'platform', { value: was.platform });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('in a Steam launch, never start the Flatpak’s new version: the update only quits', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'u5-updates-'));
+    const wasId = process.env.FLATPAK_ID;
+    process.env.FLATPAK_ID = 'com.synthwavepixel.ultima5';
+    try {
+      let spawned = 0;
+      let quits = 0;
+      let installed: () => void = () => {};
+      const flatpak = {
+        connect: async () => ({ spawnLatest: async () => void spawned++ }),
+        watch: async (o: { installed: () => void }) => void (installed = o.installed),
+      };
+      const electron = {
+        app: { isPackaged: true, getVersion: () => '1.1.10', getPath: () => dir, quit: () => void quits++ },
+        net: { fetch: async () => ({ ok: true, json: async () => ({ tag_name: 'v1.1.12' }) }) },
+      };
+      await checkForUpdates({
+        electron,
+        quiet: false,
+        file: join(dir, 'updates.json'),
+        steam: true,
+        flatpak: flatpak as never,
+      });
+      installed();
+      expect(currentOffer()).toMatchObject({ kind: 'restart', installed: true, quits: true, version: '1.1.12' });
+      expect(applyUpdate({ electron, steam: true })).toBe(true);
+      expect(quits).toBe(1);
+      expect(spawned).toBe(0);
+    } finally {
+      if (wasId === undefined) delete process.env.FLATPAK_ID;
+      else process.env.FLATPAK_ID = wasId;
       rmSync(dir, { recursive: true, force: true });
     }
   });

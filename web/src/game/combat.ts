@@ -3562,7 +3562,11 @@ export function drawCombatMarks(g: Game): void {
   const c = g.combat[s.combatTurn];
   const validTurn = c !== undefined && (!(c.flags & CF.Player) || g.s.members[c.who] !== undefined);
   // A combat slot can be stale for one frame while combat is ending; do not dereference its old member.
-  if (standard && s.combatTurn !== 0xff && validTurn && !onMonsterSide(g, s.combatTurn)) d.marker!(c.x, c.y, turnColour(g, c.who));
+  // In the colour of the member's bar in the party panel: their state's, else their hit points', else white. A creature
+  // summoned or charmed to the party's side has no bar - its `who` is what it is, not a member - and is marked white.
+  if (standard && s.combatTurn !== 0xff && validTurn && !onMonsterSide(g, s.combatTurn)) {
+    d.marker!(c.x, c.y, c.flags & CF.Player ? turnColour(g, c.who) : Colour.brightWhite);
+  }
   // The foe an X would strike: the crosshair's mark, small (snapMark) - over the turn's outline, a foe beside them.
   const snap = marks ? snapMark(g) : -1;
   if (snap >= 0) d.aim!(g.combat[snap].x, g.combat[snap].y, 'attack', true);

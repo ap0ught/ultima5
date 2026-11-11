@@ -1603,7 +1603,9 @@ export async function pauseMenu(g: Game, midCommand = false): Promise<number> {
         act:
           offer.kind === 'restart'
             ? say(
-                `${name} ${offer.installed ? 'is installed' : 'has downloaded'}. It starts the next time you play: Save and quit, and start the game again, to play it now.`,
+                offer.onQuit
+                  ? `${name} has downloaded. It installs when the game quits.`
+                  : `${name} ${offer.installed ? 'is installed' : 'has downloaded'}. It starts the next time you play: Save and quit, and start the game again, to play it now.`,
               )
             : offer.page === false
               ? say(`${name} is out. ${desktopModeWay(offer)}`)
@@ -1765,6 +1767,12 @@ const RULES_NOTES: Record<Rules, string> = {
   classic: 'As in 1988, as the Apple II has it: deadly.',
 };
 const INPUT_NAMES: Record<InputMode, string> = { letters: 'Classic', controller: 'Controller' };
+
+/** The edition's name with the app's version, where the page has one (the web has none): Settings' last line, the title's. */
+export function editionName(g: Game): string {
+  const version = g.hooks.version?.();
+  return version ? `Ultima V SP ${version}` : 'Ultima V SP';
+}
 
 /** One line of the Settings menu: what it says, and what choosing it does. */
 export interface Setting extends Item {
@@ -1962,6 +1970,8 @@ export function settingLines(g: Game, title = false): Setting[] {
     // A game carried in and out (transfer.ts): at the title these are Manage Saves' (characterMenu.ts), with Delete
     // Character and Remove game files.
     ...(title ? [] : transferLines(g)),
+    // Which edition this is and its version, for a tester's report: grey, and the bar steps over it.
+    { label: editionName(g), enabled: false },
   ];
 }
 

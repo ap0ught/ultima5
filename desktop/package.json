@@ -41,6 +41,14 @@
       "updates.cjs",
       "flatpakUpdates.cjs",
       "portable.cjs",
+      "instanceMode.cjs",
+      "steam.cjs",
+      "steamSaves.cjs",
+      "steamOptions.cjs",
+      "steamReport.cjs",
+      "steamSetup.cjs",
+      "launchCheck.cjs",
+      "appinfo.cjs",
       "build/icons/256x256.png",
       "build/steam/*.png",
       "app/**/*"
@@ -123,7 +131,7 @@
       }
     },
     "appImage": {
-      "artifactName": "Ultima-V-${version}-${arch}.${ext}"
+      "artifactName": "ultima5-sp-${arch}.${ext}"
     },
     "flatpak": {
       "files": [

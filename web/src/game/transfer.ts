@@ -8,6 +8,7 @@
  * ui/pageHooks.ts).
  */
 
+import { kept } from './keyStore.ts';
 import { charKey, chooseCharacter, MAX_CHARACTERS, newCharacter } from './characters.ts';
 import { DEFAULT_APPEARANCE, FIGURES, SKIN, type Appearance } from './appearance.ts';
 import type { Game } from './game.ts';
@@ -170,7 +171,7 @@ export function exportText(g: Game, id: string | null = null): string | null {
   if (!saved) return null;
   let settings: Partial<Options> | undefined;
   try {
-    const raw = localStorage.getItem(charKey(who!, 'settings'));
+    const raw = kept().getItem(charKey(who!, 'settings'));
     if (raw) settings = JSON.parse(raw) as Partial<Options>;
   } catch {
     /* without them */

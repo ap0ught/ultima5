@@ -15,6 +15,8 @@ import { avatarName, fromBase64, parseSave } from '../game/storage.ts';
 import { Save } from '../game/save.ts';
 import { partyFigures } from '../game/world.ts';
 import { clearInstalled } from '../install/store.ts';
+import { reportArgs, steamLaunch, steamNative } from '../install/sources.ts';
+import { cloudSaves } from '../game/keyStore.ts';
 import { GamepadInput } from './gamepad.ts';
 import type { CapacitorLike } from './platform.ts';
 import { mapKey, showMap } from './mapView.ts';
@@ -473,10 +475,12 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
     shown: recall(PAD_KEY) === '1',
     fullScreen: fullScreen(),
   });
+  const copy = (text: string): Promise<void> => navigator.clipboard.writeText(text);
+  const steam = steamNative();
   g.hooks = {
     applyOptions: apply,
     transfer: {
-      copy: (text) => navigator.clipboard.writeText(text),
+      copy,
       copyImage: async (text) => {
         const image = await engineCharacterImage(g, screen, text);
         if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('Image clipboard is unavailable');
@@ -521,5 +525,41 @@ export function installPageHooks(g: Game, screen: Screen, canvas: HTMLCanvasElem
       screen.flushKeys();
       return text;
     },
+    // The desktop app alone has a Steam to set up: web and Android show no Steam (beta) menu.
+    ...(steam
+      ? {
+          steam: {
+            status: () => steam.status(),
+            launched: () => steamLaunch().steam,
+            options() {
+              const { playLine, compatTool, macPlay, cloud, account } = steam.options();
+              return {
+                playLine,
+                compatTool,
+                macPlay,
+                cloud: account !== null && cloud[account] === true,
+                cloudAny: Object.values(cloud).some((on) => on),
+              };
+            },
+            setOption: (name, on) => steam.setOption(name, on),
+            lineState: () => steam.lineState(),
+            async copyLine() {
+              const line = await steam.launchLine();
+              if (line === null) return false;
+              await copy(line);
+              return true;
+            },
+            async copyReport() {
+              const report = await steam.report(reportArgs());
+              if (report === null) return false;
+              await copy(report);
+              return true;
+            },
+            // The system's browser, as the installer opens GOG's page (desktop/main.cjs setWindowOpenHandler).
+            open: (url) => void window.open(url, '_blank'),
+            cloud: cloudSaves(steam),
+          },
+        }
+      : {}),
   };
 }

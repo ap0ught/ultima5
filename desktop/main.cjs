@@ -12,15 +12,21 @@
 // The page is sandboxed, and the installer's scan for the game's files is the
 // one thing it may ask of the disk (preload.cjs, scan.cjs). Launched from a
 // non-Steam shortcut, the app puts Steam's library artwork in place, once
-// (steamArt.cjs). Newer releases are looked for once it is up, and installed or told of as the copy allows
-// (updates.cjs). The Windows portable .exe keeps its data in a folder beside it (portable.cjs).
+// (steamArt.cjs). Launched by Steam itself, the saves are files in the game's folder (steamSaves.cjs). Newer releases are looked for once it is up, and installed or told of as the copy allows
+// (updates.cjs). The Windows portable .exe keeps its data in a folder beside it (portable.cjs). The title's Steam (beta)
+// menu turns options on and off that set Steam up to play its Ultima V with this engine, or take that away
+// (steamOptions.cjs, steamSetup.cjs); on a Mac with its option on, each start puts the edit back if Steam has undone it.
 const electron = require('electron');
-const { app, BrowserWindow, protocol, net, shell, session, ipcMain } = electron;
+<<<<<<< HEAD
+const { app, BrowserWindow, dialog, protocol, net, shell, session, ipcMain } = electron;
 const { join, normalize, basename } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { homedir } = require('node:os');
-const { writeFileSync, existsSync, readdirSync, readFileSync, mkdirSync, openSync, closeSync, unlinkSync } = require('node:fs');
-const { scanForGameFiles } = require('./scan.cjs');
+const fs = require('node:fs');
+const { writeFileSync, existsSync, readdirSync, readFileSync, mkdirSync, openSync, closeSync, unlinkSync } = fs;
+const { execFile, spawnSync } = require('node:child_process');
+const { missingNames, readCopy, scanForGameFiles } = require('./scan.cjs');
+>>>>>>> cb2110f91109beb9be35a1cf1bec694b2a252d52
 const { readState, startsFullScreen, writeState } = require('./windowState.cjs');
 const {
   applyUpdate,
@@ -37,6 +43,13 @@ const {
 } = require('./updates.cjs');
 const { installSteamArt } = require('./steamArt.cjs');
 const { portableData } = require('./portable.cjs');
+const { accountId, findGame, isSteamLaunch, libraryPaths, saveDir, steamRoots } = require('./steam.cjs');
+const { loadAll, removeKey, writable, writeKey } = require('./steamSaves.cjs');
+const { readOptions, switchAndKeep } = require('./steamOptions.cjs');
+const { mask, report: steamReport } = require('./steamReport.cjs');
+const { lineState } = require('./launchCheck.cjs');
+const { clashMessage, noteMode } = require('./instanceMode.cjs');
+const steamSetup = require('./steamSetup.cjs');
 
 // The portable .exe's data beside it, set before anything (the single-instance lock, the page's storage) uses it - and
 // before anything asks for the data folder, which Electron makes as it is asked (portable.cjs).
@@ -89,6 +102,273 @@ protocol.registerSchemesAsPrivileged([
   { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
 
+/**
+ * Windows' Steam folder, from the registry (HKCU\Software\Valve\Steam SteamPath), asked once; null elsewhere or when
+ * it is not set. Steam writes it with forward slashes, which steamRoots takes as a Windows path only with backslashes.
+ */
+let registryPath;
+function registrySteamPath() {
+  if (registryPath !== undefined) return registryPath;
+  registryPath = null;
+  if (process.platform !== 'win32') return registryPath;
+  const r = spawnSync('reg', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'SteamPath'], { encoding: 'utf8', windowsHide: true });
+  const m = /SteamPath\s+REG_\w+\s+(.+)/.exec(r.stdout ?? '');
+  if (m) registryPath = m[1].trim().replace(/\//g, '\\');
+  return registryPath;
+}
+
+/** Where Steam may be on this system (steam.cjs), the registry's place first on Windows. */
+const steamRootsHere = () =>
+  steamRoots({ platform: process.platform, home: homedir(), env: process.env, registrySteamPath: registrySteamPath() });
+
+let found;
+/**
+ * Steam and Ultima V in its libraries, looked for once whether or not Steam launched the app (the page asks again and
+ * again): `steam` - is there a Steam root at all - and `game` - 'ok' (its folder is there), 'missing' (Steam lists it
+ * in a library whose folder is not there) or 'none' (no library holds it) - and `where`: the folder, or the library it
+ * was expected in. `root` is the Steam folder whose library holds the game (it also names the account), else null.
+ * Only reads.
+ */
+function steamFind() {
+  if (found) return found;
+  const read = (path) => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const roots = steamRootsHere();
+  const steam = roots.some((r) => existsSync(r));
+  let missing = null;
+  for (const root of roots) {
+    const game = findGame([root], read, existsSync);
+    if (game && 'missing' in game) missing ??= game.missing;
+    if (!game || !('folder' in game)) continue;
+    return (found = { steam, game: 'ok', where: game.folder, folder: game.folder, root });
+  }
+  if (missing !== null) return (found = { steam, game: 'missing', where: missing, folder: null, root: null });
+  return (found = { steam, game: 'none', where: '', folder: null, root: null });
+}
+
+/**
+ * What a Steam launch found: null when Steam did not launch the game, else steamFind's `game` and `where`. `dir` is
+ * where the saves are kept, <game folder>/ultima5-sp/<account id>, null without a folder or an account (a launch
+ * that mixed accounts would be worse than none); `folder` is the game's own.
+ */
+function steamLaunch() {
+  if (!isSteamLaunch(process.env)) return null;
+  const f = steamFind();
+  if (f.root === null) return { game: f.game, where: f.where, folder: null, account: false, accountId: null, dir: null };
+  const read = (path) => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  // The Steam folder whose library holds the game is the one whose login file names the account.
+  const account = accountId(f.root, process.env, read);
+  return {
+    game: 'ok',
+    where: f.folder,
+    folder: f.folder,
+    account: account !== null,
+    accountId: account,
+    dir: account === null ? null : saveDir(f.folder, account),
+  };
+}
+
+/**
+ * Whether Steam is running: steam_osx on a Mac, steam on Linux. Only pgrep's "none found" (status 1) says it is not:
+ * a pgrep that could not be run or failed says nothing, and Steam's files are not edited on nothing.
+ */
+function steamRunning() {
+  const name = { darwin: 'steam_osx', linux: 'steam' }[process.platform];
+  return name !== undefined && spawnSync('pgrep', ['-x', name]).status !== 1;
+}
+
+/** Asks Steam on a Mac to quit, then waits up to 40 s for it to go. It goes even when osascript says "User canceled". */
+function quitSteam() {
+  return new Promise((resolve) => {
+    execFile('osascript', ['-e', 'quit app "Steam"'], () => {
+      const until = Date.now() + 40_000;
+      const look = () => (!steamRunning() || Date.now() > until ? resolve() : setTimeout(look, 500));
+      look();
+    });
+  });
+}
+
+// This build, for the launch line: the Flatpak, the AppImage (its name has no version, so updates overwrite it and the line
+// holds), the portable .exe.
+const asFlatpak = process.env.FLATPAK_ID === steamSetup.FLATPAK_ID;
+const appImage = process.env.APPIMAGE || null;
+const launchLineHere = () =>
+  steamSetup.launchLine({
+    platform: process.platform,
+    exe: process.execPath,
+    appImage,
+    flatpak: asFlatpak,
+    portable: !!process.env.PORTABLE_EXECUTABLE_DIR,
+  });
+
+/**
+ * What names this copy in its launch line, as lineState looks for it: the Flatpak's id, the AppImage's file or the
+ * installed exe.
+ */
+const launchLineName = () => (asFlatpak ? steamSetup.FLATPAK_ID : appImage || process.execPath);
+
+/**
+ * Whether the launch line Steam saved for Ultima V is this copy's, read back from localconfig.vdf (launchCheck.cjs) and
+ * only ever read. Off a Steam launch Steam does not say which account is playing, so it is the one signed in most
+ * recently (steam.cjs accountId); a launch uses its own. `lineOnAt` is when the option was turned on: until Steam has
+ * written the file since then, an absent line is "not seen yet". Null where there is no line to check or no Steam.
+ */
+function steamLineState(options) {
+  const expected = launchLineHere();
+  if (!expected) return null;
+  const root = steamFind().root ?? steamRootsHere().find((r) => existsSync(r));
+  if (!root) return null;
+  const read = (path) => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const account = accountId(root, process.env, read);
+  const file = account === null ? null : join(root, 'userdata', account, 'config', 'localconfig.vdf');
+  let written = null;
+  try {
+    if (file !== null) written = fs.statSync(file).mtimeMs;
+  } catch {}
+  const recentlyTurnedOn = options.lineOnAt !== 0 && (written === null || written < options.lineOnAt);
+  return {
+    state: lineState(file === null ? null : read(file), expected, launchLineName(), recentlyTurnedOn),
+    bothLinux: process.platform === 'linux' && options.playLine && options.compatTool,
+  };
+}
+
+/** A Mac's Steam folder, the app, and what setup keeps in the app's data (steamSetup.cjs). */
+const macWhere = () => ({
+  fs,
+  steamRoot: steamRoots({ platform: 'darwin', home: homedir(), env: process.env })[0],
+  appExe: process.execPath,
+  packaged: app.isPackaged,
+  keptOriginal: join(app.getPath('userData'), 'steam-appinfo-3067520.bin'),
+  noteFile: join(app.getPath('userData'), 'steam-setup.json'),
+  steamRunning,
+  quitSteam,
+});
+
+const SYSTEM = { darwin: 'mac', win32: 'windows' }[process.platform] ?? 'linux';
+
+/**
+ * What the Steam (beta) menu opens with: this system and build, Steam's folder (the player's home written ~, as the
+ * report writes it) or null, Ultima V in its libraries, whether a Steam account is known (a launch's own, else the one
+ * signed in most recently), whether Steam launched this run, the launch line this copy would use, and on a Mac whether
+ * Steam is running, which turning the option off would quit. Only reads.
+ */
+function steamStatus(launch) {
+  const f = steamFind();
+  const root = f.root ?? steamRootsHere().find((r) => existsSync(r)) ?? null;
+  const read = (path) => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const home = homedir();
+  return {
+    system: SYSTEM,
+    flatpak: asFlatpak,
+    steam: root === null ? null : mask(root, home),
+    game: f.game,
+    where: mask(f.where, home),
+    account: (launch ? launch.accountId : root === null ? null : accountId(root, process.env, read)) !== null,
+    launch: launch !== null,
+    line: launchLineHere(),
+    ...(SYSTEM === 'mac' ? { steamRunning: root !== null && steamRunning() } : {}),
+  };
+}
+
+// Whether this start had to put Ultima V's cache entry back (null: not looked at yet, or not a Mac), for the report.
+let macReapplied = null;
+
+/**
+ * What the tester report is made from (steamReport.cjs): only what is found by reading. Where the engine took its game
+ * files from, and the names that make a copy whole, are the page's to say (`page`, validated by the handler). The characters in Steam's
+ * folder are the ids on its list (ultima5.characters), counted with the saves' contents left unsaid.
+ */
+function reportFacts(options, launch, page) {
+  const f = steamFind();
+  const read = (path) => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const root = f.root ?? steamRootsHere().find((r) => existsSync(r)) ?? null;
+  const libraries = root === null ? [] : libraryPaths(root, read);
+  const steamMissing = f.folder === null ? null : missingNames(f.folder, page.required);
+  const account = launch?.accountId ?? null;
+  const cloud = account === null ? null : options.cloud[account] === true;
+  let cloudCharacters = null;
+  if (cloud && launch.dir) {
+    try {
+      const ids = JSON.parse(loadAll(launch.dir)?.['ultima5.characters'] ?? '').ids;
+      cloudCharacters = Array.isArray(ids) ? ids.length : 0;
+    } catch {
+      cloudCharacters = 0;
+    }
+  }
+  const build = asFlatpak
+    ? 'Flatpak'
+    : appImage
+      ? 'AppImage'
+      : process.env.PORTABLE_EXECUTABLE_DIR
+        ? 'portable'
+        : app.isPackaged
+          ? 'installed'
+          : 'development';
+  const env = {};
+  for (const name of ['SteamAppId', 'SteamGameId', 'STEAM_COMPAT_APP_ID', 'SteamUser', 'FLATPAK_ID']) env[name] = process.env[name];
+  const line = steamLineState(options);
+  return {
+    version: app.getVersion(),
+    system: SYSTEM,
+    arch: process.arch,
+    build,
+    home: homedir(),
+    bySteam: isSteamLaunch(process.env),
+    env,
+    steamRoot: root,
+    libraries,
+    game: f.game === 'ok' ? 'ok' : f.game === 'missing' ? 'missing' : 'none',
+    where: f.where,
+    filesFrom: page.filesFrom,
+    steamMissing,
+    options,
+    cloud,
+    accountKnown: account !== null,
+    lineState: line?.state ?? null,
+    macPatched: SYSTEM === 'mac' && root !== null ? steamSetup.macPatched(macWhere()) : null,
+    macReapplied: SYSTEM === 'mac' ? macReapplied : null,
+    cloudCharacters,
+  };
+}
+
+/** What turning each option on or off does here (steamOptions.cjs switchOption): Steam's own folders, as steamSetup.cjs keeps them. */
+const optionEffects = {
+  line: launchLineHere,
+  installTool: () => (asFlatpak || appImage ? steamSetup.installCompatTool(fs, steamRootsHere(), { flatpak: asFlatpak, appImage }) : null),
+  removeTool: () => steamSetup.removeCompatTool(fs, steamRootsHere()),
+  macSetup: () => steamSetup.macSetup(macWhere()),
+  macRestore: () => steamSetup.macRestore(macWhere()),
+};
+
 /** Where the window was last as a window, and whether it was last full screen (windowState.cjs). */
 const stateFile = () => join(app.getPath('userData'), 'window.json');
 function saveBounds(win) {
@@ -110,10 +390,12 @@ function createWindow() {
     // macOS altogether (the green button, Window > Enter Full Screen, F11), so it is left unsaid otherwise.
     fullscreenable: true,
     ...(startsFullScreen(process.argv, process.env, saved) ? { fullscreen: true } : {}),
-    title: 'Ultima V',
+    title: `Ultima V SP ${app.getVersion()}`,
     icon: join(__dirname, 'build', 'icons', '256x256.png'), // the window's (packaged: package.json build.files)
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: join(__dirname, 'preload.cjs') },
   });
+  // The page's own <title> (Ultima V SP) must not replace the window's, which carries the version.
+  win.on('page-title-updated', (event) => event.preventDefault());
   win.setMenuBarVisibility(false);
   win.removeMenu();
   win.on('resize', () => saveBounds(win));
@@ -169,9 +451,19 @@ function createWindow() {
 // game on the same save, where whichever copy saved last would silently overwrite the other. Under Flatpak the lock
 // works across launches because the wrapper points TMPDIR, where Chromium keeps the lock's socket, at a directory the
 // instances share.
-const primary = app.requestSingleInstanceLock();
-if (!primary) app.quit();
-app.on('second-instance', () => {
+//
+// A copy of the other kind (through Steam, or not) plays different saves, so it is told so and quits instead. Every
+// copy gives its mode with the lock request; the one the lock refuses reads the running copy's mode from instance.json
+// (instanceMode.cjs), which the first copy wrote once it had the lock, and the first copy ignores a request of the
+// other mode (the two starting at once).
+const steamMode = isSteamLaunch(process.env);
+const modeFile = join(app.getPath('userData'), 'instance.json');
+const primary = app.requestSingleInstanceLock({ steam: steamMode });
+const clash = primary ? null : clashMessage(modeFile, steamMode);
+if (primary) noteMode(modeFile, steamMode);
+else app.quit();
+app.on('second-instance', (_event, _argv, _cwd, data) => {
+  if (data?.steam !== steamMode) return;
   const win = BrowserWindow.getAllWindows()[0];
   if (!win) return;
   if (win.isMinimized()) win.restore();
@@ -180,7 +472,11 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(() => {
-  if (!primary) return; // quitting: see above
+  if (!primary) {
+    // Quitting: see above. The refused copy of the other mode says why first.
+    if (clash !== null) dialog.showMessageBoxSync({ type: 'info', title: 'Ultima V', message: clash });
+    return;
+  }
   // app://ultima5/<path> -> app/<path>, confined to that folder.
   protocol.handle(SCHEME, (request) => {
     const url = new URL(request.url);
@@ -220,6 +516,82 @@ app.whenReady().then(() => {
       ? scanForGameFiles(names)
       : [],
   );
+  // A Steam launch (preload.cjs u5native.steam), decided here once and answered only to the game's own page: whether
+  // there is one, where the game's files are, and whether an account is known. The game's files are read from the folder
+  // Steam gave, the files the page names; none where there is no folder.
+  const launch = steamLaunch();
+  ipcMain.on('steam-launch', (event) => {
+    event.returnValue =
+      launch && String(event.senderFrame?.url ?? '').startsWith('app://')
+        ? { steam: true, game: launch.game, where: launch.where, account: launch.account }
+        : { steam: false };
+  });
+  // What Steam has, launched by it or not (preload.cjs u5native.steam.find), and its files for the one-time take.
+  ipcMain.on('steam-find', (event) => {
+    const f = steamFind();
+    event.returnValue = String(event.senderFrame?.url ?? '').startsWith('app://')
+      ? { steam: f.steam, game: f.game, where: f.where }
+      : { steam: false, game: 'none', where: '' };
+  });
+  ipcMain.handle('steam-game-files', (event, names) =>
+    steamFind().folder &&
+    String(event.senderFrame?.url ?? '').startsWith('app://') &&
+    Array.isArray(names) &&
+    names.every((n) => typeof n === 'string')
+      ? { where: steamFind().folder, files: readCopy(steamFind().folder, names) }
+      : null,
+  );
+  // The saves of a Steam launch (preload.cjs u5native.steam.saves, web/src/game/keyStore.ts), asked for synchronously so
+  // that a write the disk refuses fails the save at once. Answered only to the game's own page, and only with a folder to
+  // keep them in (otherwise all gives null, and the others say false).
+  const saveDir = launch?.dir ?? null;
+  const savesFor = (event) => (String(event.senderFrame?.url ?? '').startsWith('app://') ? saveDir : null);
+  // A folder that will not read, or reads but can't be written, is out of reach (null): the page keeps this computer's
+  // saves instead and says so (boot.ts chooseStore), rather than lose each save it makes there.
+  ipcMain.on('steam-saves-all', (event) => {
+    const dir = savesFor(event);
+    event.returnValue = dir === null || !writable(dir) ? null : loadAll(dir);
+  });
+  ipcMain.on('steam-saves-set', (event, key, value) => {
+    const dir = savesFor(event);
+    // True, or why the write was refused (steamSaves.cjs): the page lets earlier saves go only for a full disk.
+    event.returnValue = dir !== null && typeof key === 'string' && typeof value === 'string' && writeKey(dir, key, value);
+  });
+  ipcMain.on('steam-saves-remove', (event, key) => {
+    const dir = savesFor(event);
+    event.returnValue = dir !== null && typeof key === 'string' && removeKey(dir, key);
+  });
+  // The Steam options (preload.cjs u5native.steam.options / setOption), kept per machine. The page is told them with
+  // this launch's account (null off Steam or with none known), as Cloud saves is per account. A switch does what the
+  // option does here and keeps how it went (steamOptions.cjs switchOption); Cloud saves' copy is the page's, only
+  // recorded here, and only in a Steam launch that knows its account. One switch at a time: a second waits.
+  const optionsFile = join(app.getPath('userData'), 'steam-options.json');
+  ipcMain.on('app-version', (event) => {
+    event.returnValue = String(event.senderFrame?.url ?? '').startsWith('app://') ? app.getVersion() : null;
+  });
+  ipcMain.on('steam-options', (event) => {
+    event.returnValue = String(event.senderFrame?.url ?? '').startsWith('app://')
+      ? { ...readOptions(optionsFile), account: launch?.accountId ?? null }
+      : { ...readOptions(null), account: null };
+  });
+  let switching = Promise.resolve();
+  ipcMain.handle('steam-option', (event, name, on, failed) => {
+    if (!String(event.senderFrame?.url ?? '').startsWith('app://')) return null;
+    const run = () =>
+      switchAndKeep(optionsFile, {
+        options: readOptions(optionsFile),
+        name,
+        on,
+        system: SYSTEM,
+        account: launch?.accountId ?? null,
+        now: Date.now(),
+        failed: typeof failed === 'string' ? failed : undefined,
+        effects: optionEffects,
+      });
+    const turned = switching.then(run);
+    switching = turned.catch(() => undefined);
+    return turned;
+  });
   // The touch pad's full-screen button (preload.cjs): whether the window is full screen, set first if `on` is given.
   // Only the game's own page may ask.
   ipcMain.handle('full-screen', (event, on) => {
@@ -252,7 +624,7 @@ app.whenReady().then(() => {
   });
   const updatesFile = join(app.getPath('userData'), 'updates.json');
   ipcMain.handle('update-offer', (event) => (fromGame(event) ? currentOffer() : null));
-  ipcMain.handle('update-apply', (event) => fromGame(event) && applyUpdate({ electron }));
+  ipcMain.handle('update-apply', (event) => fromGame(event) && applyUpdate({ electron, steam: steamMode }));
   ipcMain.handle('update-told', (event) => void (fromGame(event) && toldOfUpdate({ file: updatesFile })));
   // The first start of a newer version, for the title to say once, and that release's notes for its What's new.
   lookForNews({ app, file: updatesFile });
@@ -279,6 +651,22 @@ app.whenReady().then(() => {
     } catch {
       return null;
     }
+  });
+  // The Steam (beta) menu (web/src/game/steamMenu.ts): what was found, and the launch line to copy. Only the game's own
+  // page may ask.
+  ipcMain.handle('steam-status', (event) => (fromGame(event) ? steamStatus(launch) : null));
+  ipcMain.handle('steam-launch-line', (event) => (fromGame(event) ? launchLineHere() : null));
+  // Whether the launch line Steam saved is this copy's (steamLineState above), for the Steam (beta) menu.
+  ipcMain.handle('steam-line-state', (event) => (fromGame(event) ? steamLineState(readOptions(optionsFile)) : null));
+  // The tester report for Copy report (steamReport.cjs): plain text, no save or file contents.
+  ipcMain.handle('steam-report', (event, page) => {
+    const ok =
+      page &&
+      ['steam', 'installer', 'unknown'].includes(page.filesFrom) &&
+      Array.isArray(page.required) &&
+      page.required.every((n) => typeof n === 'string');
+    return fromGame(event) && ok ? steamReport(reportFacts(readOptions(optionsFile), launch, page)) : null;
+  });
   });
   const win = createWindow();
   onOffer((o) => {
@@ -318,10 +706,29 @@ app.whenReady().then(() => {
     })
       .then((r) => r.result !== 'not from a shortcut' && console.log('steam artwork:', JSON.stringify(r)))
       .catch(() => {});
+    // Play from Steam on, on a Mac: its cache entry given our launch again if Steam has replaced it (or left for a start
+    // with Steam closed).
+    try {
+      if (SYSTEM === 'mac' && readOptions(optionsFile).macPlay) {
+        const before = steamSetup.macPatched(macWhere());
+        const state = steamSetup.macReapply(macWhere());
+        macReapplied = before === false && state === 'ready';
+        if (state !== 'not-set-up' && state !== 'ready') console.log('steam setup:', state);
+      }
+    } catch (e) {
+      console.warn('steam setup not re-applied:', e);
+    }
   }, 3000);
   // Newer releases looked for at once (updates.cjs), the game playing on while one comes down; no page offered under
   // Game Mode. Never in a smoke test.
-  if (!process.env.ULTIMA5_SMOKE) void checkForUpdates({ electron, quiet: inGamescope, file: updatesFile });
+  if (!process.env.ULTIMA5_SMOKE) {
+    void checkForUpdates({
+      electron,
+      quiet: inGamescope,
+      file: updatesFile,
+      steam: steamMode,
+    });
+  }
   // A smoke test (smoke.cjs): screenshot once the game is up, then quit. Looked for every half second, from six seconds
   // after the page loads, for up to thirty: a slow runner (Windows CI's, once) was not up at a single look at six.
   const shot = process.env.ULTIMA5_SMOKE;

@@ -16,6 +16,7 @@
 import { K, Pad, TURN_LEFT, TURN_RIGHT } from '../game/io.ts';
 import { firstConnectedPad } from './connectedPad.ts';
 import { HOLD_FIRST_MS, INPUT_PACES, type Holds } from './holds.ts';
+import { axesOf, connectedPads, firstPad } from './pads.ts';
 const DEADZONE = 0.5;
 /** How near its middle an axis must come to be taken for at rest. */
 const REST = 0.25;
@@ -104,13 +105,11 @@ export class GamepadInput {
 
   /** Whether any pad is connected. */
   private connected(): boolean {
-    const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : null;
-    return firstConnectedPad(pads) !== null;
+    return connectedPads().length > 0;
   }
 
   private poll(now: number): void {
-    const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : null;
-    const pad = firstConnectedPad(pads);
+    const pad = firstPad();
     if (!pad) return;
     if (this.holds.breaks !== this.breaks) {
       this.breaks = this.holds.breaks;
@@ -126,7 +125,7 @@ export class GamepadInput {
     }
     let dir = 0;
     for (const [i, code] of DPAD) if (pad.buttons[i]?.pressed) dir = code;
-    for (let i = 0; i < pad.axes.length; i++) if (Math.abs(pad.axes[i] ?? 0) < REST) this.rested.add(i);
+    axesOf(pad).forEach((v, i) => Math.abs(v) < REST && this.rested.add(i));
     const axis = (i: number): number => (this.rested.has(i) ? (pad.axes[i] ?? 0) : 0);
     const [ax, ay] = [axis(0), axis(1)];
     if (dir === 0 && Math.max(Math.abs(ax), Math.abs(ay)) > DEADZONE) {

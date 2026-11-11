@@ -14,7 +14,7 @@
 import { GameFiles } from '../data/files.ts';
 import { complete, identify, listed, type Candidate, type Identified } from './gameFiles.ts';
 import { scanOutcome } from './scan.ts';
-import { androidFolder, autoscanAsked, desktopScan, webCopy } from './sources.ts';
+import { androidFolder, autoscanAsked, desktopScan, noteFilesFrom, webCopy } from './sources.ts';
 import { saveInstalled } from './store.ts';
 import { readInno } from './inno.ts';
 import { readZip } from './zip.ts';
@@ -150,6 +150,7 @@ export function runInstaller(notice?: string): Promise<GameFiles> {
     const install = async (found: Identified): Promise<void> => {
       status.textContent = 'Installing…';
       await saveInstalled(found.files);
+      noteFilesFrom('installer');
       stopMenu();
       root.remove();
       style.remove();

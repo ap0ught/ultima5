@@ -1,9 +1,11 @@
-// The page's bridge to the app: a newer version (updates.cjs), a scan for the player's copy of Ultima V, made by the main process (scan.cjs; web/src/
+// The page's bridge to the app: a Steam launch's saves, a newer version (updates.cjs), a scan for the player's copy of Ultima V, made by the main process (scan.cjs; web/src/
 // install/sources.ts desktopScan), and the window's full screen, for the touch pad's button (web/src/ui/fullScreen.ts).
 // The page stays sandboxed and isolated; this is all it is given.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('u5native', {
+  // The app's own version (main.cjs app.getVersion()), for the edition's name in Settings and on the title.
+  version: () => ipcRenderer.sendSync('app-version'),
   scanForGameFiles: (names) => ipcRenderer.invoke('scan-game-files', names),
   importFiles: {
     list: () => ipcRenderer.invoke('list-import-files'),
@@ -26,6 +28,38 @@ contextBridge.exposeInMainWorld('u5native', {
     news: () => ipcRenderer.invoke('update-news'),
     newsSeen: () => ipcRenderer.invoke('update-news-seen'),
     notes: (version) => ipcRenderer.invoke('update-notes', version),
+  },
+  steam: {
+    // Whether Steam launched the game, and what it found (main.cjs steamLaunch): { steam: false }, or { steam: true,
+    // game: 'ok' | 'missing' | 'none', where, account }. And the game's files from the folder it gave.
+    launch: () => ipcRenderer.sendSync('steam-launch'),
+    // Steam's libraries and Ultima V in them, found whether or not Steam launched the app (main.cjs steamFind).
+    find: () => ipcRenderer.sendSync('steam-find'),
+    gameFiles: (names) => ipcRenderer.invoke('steam-game-files', names),
+    // The Steam (beta) menu (main.cjs steamStatus): what was found of Steam, and the launch line to copy.
+    status: () => ipcRenderer.invoke('steam-status'),
+    launchLine: () => ipcRenderer.invoke('steam-launch-line'),
+    // Whether Steam's saved launch line is this copy's: { state: 'correct' | 'missing' | 'not-seen' | 'stale' | 'twice', bothLinux }, or null (main.cjs steamLineState).
+    lineState: () => ipcRenderer.invoke('steam-line-state'),
+    // The plain-text report for testers to paste into an issue (main.cjs reportFacts, steamReport.cjs). The page gives
+    // what only it knows: { filesFrom, required } (web/src/install/sources.ts reportArgs).
+    report: (page) => ipcRenderer.invoke('steam-report', page),
+    // The Steam options kept on this machine (main.cjs), with this launch's Steam account id or null; and a switch,
+    // which does what the option does and says how it went: { on, message, line? }, or null where refused. Cloud
+    // saves' copy is the page's: `failed` says why it failed, the option left as it was.
+    options: () => ipcRenderer.sendSync('steam-options'),
+    setOption: (name, on, failed) => ipcRenderer.invoke('steam-option', name, on, failed),
+    // A Steam launch's saves, as files (main.cjs, web/src/game/keyStore.ts). Synchronous, so that a save the disk
+    // refuses fails at once. `all` is every key kept, or null where there is nowhere to keep them. `set` says true, or
+    // why the write was refused (the system's code, 'ENOSPC' for a full disk), or false.
+    saves: {
+      all: () => ipcRenderer.sendSync('steam-saves-all'),
+      set: (key, value) => {
+        const written = ipcRenderer.sendSync('steam-saves-set', key, value);
+        return written === true || typeof written === 'string' ? written : false;
+      },
+      remove: (key) => ipcRenderer.sendSync('steam-saves-remove', key) === true,
+    },
   },
   fullScreen: {
     /** Whether the window is full screen; made so first if `on` is given. */

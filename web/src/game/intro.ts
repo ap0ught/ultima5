@@ -13,7 +13,7 @@ import { Colour } from '../ui/colours.ts';
 import { blinker, waitMark } from './waitMark.ts';
 import { leftArrow, rightArrow, updateFrame } from './frame.ts';
 import { Game } from './game.ts';
-import { menuSound, titleShown } from './menu.ts';
+import { editionName, menuSound, titleShown } from './menu.ts';
 import { asPad, upper } from './input.ts';
 import { addressedAsLady, customisable, DEFAULT_APPEARANCE } from './appearance.ts';
 import { K, Pad, type Place, type Dressing } from './io.ts';
@@ -204,6 +204,16 @@ const SUGGESTED = [
 
 /** The title menu's choices by letter. */
 const MENU = 'JCUAR';
+/** The game's five lines (INTRO_06bc), by letter: where each starts, and its text in the game's data. */
+const GAME_LINES: Record<string, [number, number]> = {
+  J: [0xc, 0x310c],
+  C: [9, 0x311b],
+  U: [9, 0x3148],
+  A: [0xb, 0x315e],
+  R: [10, 0x316f],
+};
+/** The title's line in Journey Onward's place where the game is played from Steam (Intro steamOnly). */
+const FROM_STEAM = 'Launch From Steam';
 /** The title menu's box: the lines it holds (more scroll, intro.ts menu). */
 const MENU_ROWS = 8;
 
@@ -654,20 +664,29 @@ export class Intro {
     // The Standard look's copper for the menu's box, below the logo.
     this.g.draw.chrome?.(true, TITLE_MENU_ROW);
     const g = this.g;
-    const items: [number, number | string][] = [
-      [0xc, 0x310c],
-      [9, 0x311b],
-      [9, 0x3148],
-      [0xb, 0x315e],
-      [10, 0x316f],
-    ];
-    // The port's own lines under the game's five: its settings, managing the saves (characterMenu.ts), a newer
-    // version (ui/updates.ts), and Quit in the apps.
+    // The game's five, and the port's own lines under them: its settings, managing the saves (characterMenu.ts),
+    // Steam (beta) in the desktop app (steamMenu.ts), a newer version (ui/updates.ts), and Quit in the apps. Played
+    // from Steam, Launch From Steam stands in the place of the lines that start a game, and of Settings.
     const version = this.g.hooks.update?.offer()?.version;
-    for (const k of this.menuKeys().slice(MENU.length)) {
-      const label = k === 'S' ? 'Settings' : k === 'M' ? 'Manage Saves' : k === 'Q' ? 'Quit' : version ? `Update (${version})` : 'Update';
-      items.push([(0x28 - label.length - 2) >> 1, label]);
-    }
+    const keys = this.menuKeys();
+    const items = [...keys].map((k): [number, number | string] => {
+      if (GAME_LINES[k]) return GAME_LINES[k];
+      const label =
+        k === 'L'
+          ? FROM_STEAM
+          : k === 'S'
+            ? 'Settings'
+            : k === 'M'
+              ? 'Manage Saves'
+              : k === 'T'
+                ? 'Steam (beta)'
+                : k === 'Q'
+                  ? 'Quit'
+                  : version
+                    ? `Update (${version})`
+                    : 'Update';
+      return [(0x28 - label.length - 2) >> 1, label];
+    });
     // The box holds eight lines: more, and they scroll with the bar, an arrow at the box's edge where there are more
     // above or below.
     const top = items.length > 6 ? 0x10 : 0x11;
@@ -696,9 +715,10 @@ export class Intro {
       const i = row + this.menuTop;
       if (i === sel) g.printChar(0xfd);
       g.text.moveTo(x, row + top);
-      // Journey Onward grey with no game saved to journey on with (the port's), passed over by the bar.
+      // Journey Onward grey with no game saved to journey on with, and Launch From Steam (the port's), passed over by
+      // the bar.
       const fg = g.text.win.fg;
-      if (i === 0 && this.noSave) g.text.win.fg = 8;
+      if (this.greyAt(keys, i)) g.text.win.fg = 8;
       g.printChar(' ');
       if (typeof text === 'string') g.print(text);
       else g.say(text);
@@ -757,27 +777,56 @@ export class Intro {
 
   /**
    * The title's lines' keys: the game's five, then the port's - Settings, Manage Saves (always: Import is how a new
-   * machine's first game may come), a waiting update, Quit in the apps. More than the box's eight scroll.
+   * machine's first game may come), Steam (beta) in the desktop app, a waiting update, Quit in the apps. More than the
+   * box's eight scroll.
    */
   private menuKeys(): string {
     const after = (this.g.hooks.update?.offer() ? '!' : '') + (this.g.hooks.quit ? 'Q' : '');
-    return MENU + 'SM' + after;
+    const steam = this.g.hooks.steam ? 'T' : '';
+    if (this.steamOnly()) return 'L' + MENU.slice(2) + 'M' + steam + after;
+    return MENU + 'SM' + steam + after;
+  }
+
+  /**
+   * Whether the game is played from Steam (the port's): Play from Steam on, and this copy not started by Steam. Then
+   * Journey Onward, Create New Character and Settings give way to Launch From Steam, grey, so that a game is started
+   * only where Steam keeps it; Steam (beta) is still there to turn Play from Steam off.
+   */
+  private steamOnly(): boolean {
+    const steam = this.g.hooks.steam;
+    if (!steam || steam.launched()) return false;
+    const o = steam.options();
+    return o.playLine || o.compatTool || o.macPlay;
+  }
+
+  /** Whether the title's line `i` of `keys` is grey, passed over by the bar: Launch From Steam, or Journey Onward with no game. */
+  private greyAt(keys: string, i: number): boolean {
+    return keys[i] === 'L' || (keys[i] === 'J' && this.noSave);
   }
 
   /** Whether a newer version waits to be told of (updateBox). */
   private updateDue(): boolean {
     const offer = this.g.hooks.update?.offer();
-    return (!!offer && !offer.told) || !!this.g.hooks.update?.news?.();
+    return (!!offer && !offer.told) || !!this.g.hooks.update?.news?.() || !!this.g.hooks.note?.();
   }
 
   /**
-   * The first start of a newer version (the desktop app's), said once in a box of its own over the title: updated
-   * from what, and What's new - the release's notes, fetched from GitHub, as the game's own text pages. Whether the
+   * A note (hooks.note: a Steam launch's), or the first start of a newer version (the desktop app's), said once in a
+   * box of its own over the title: for a version, updated from what, and What's new - the release's notes, fetched from GitHub, as the game's own text pages. Whether the
    * box was shown (the title to be drawn again).
    */
   private async newsBox(): Promise<boolean> {
     const g = this.g;
     const update = g.hooks.update;
+    const note = g.hooks.note?.();
+    if (note) {
+      note.seen();
+      g.p.flushKeys();
+      const { choose, wrap } = await import('./menu.ts');
+      const lines = [...wrap(note.text).map((label) => ({ label, enabled: false })), { label: '', enabled: false }];
+      await choose(g, 'Steam', [...lines, { label: 'OK' }], lines.length, true);
+      return true;
+    }
     const news = update?.news?.();
     if (!update || !news) return false;
     update.newsSeen?.();
@@ -825,14 +874,24 @@ export class Intro {
       ? offer.page === false
         ? `${out} ${desktopModeWay(offer)}`
         : `${out} Its page says what is new. Your saved game carries over.`
-      : !offer.installed
-        ? `${name} has downloaded. It is installed when you quit, or restart to play it now.`
-        : offer.quits
-          ? `${name} is installed. Quit, and start the game again to play it.`
-          : `${name} is installed. Restart to play it now, or it starts the next time you play.`;
+      : offer.onQuit
+        ? `${name} has downloaded. It installs when the game quits.`
+        : !offer.installed
+          ? `${name} has downloaded. It is installed when you quit, or restart to play it now.`
+          : offer.quits
+            ? `${name} is installed. Quit, and start the game again to play it.`
+            : `${name} is installed. Restart to play it now, or it starts the next time you play.`;
     const lines = [...wrap(text).map((label) => ({ label, enabled: false })), { label: '', enabled: false }];
     // Where there is nothing to take up, the box is only closed.
-    const go = restart ? (offer.quits ? 'Quit now' : 'Restart now') : offer.page === false ? null : 'Open release page';
+    const go = restart
+      ? offer.onQuit
+        ? null
+        : offer.quits
+          ? 'Quit now'
+          : 'Restart now'
+      : offer.page === false
+        ? null
+        : 'Open release page';
     const i = await choose(
       g,
       restart ? 'Update ready' : 'Update available',
@@ -1605,7 +1664,22 @@ export class Intro {
     t.setWindow(1, 0x18, 1, 0x27, 9);
     t.setWindow(2, 0x18, 0xb, 0x27, 0x17);
     this.banner(g.t(0x31c1)); // "Copyright 1988 Lord British"
+    this.edition();
     this.menu(sel);
+  }
+
+  /**
+   * The edition's name and version in grey, at the right of the clear row above the menu's box: the menu fills the box
+   * (it scrolls on the desktop) and the banner is the scenes' and the copyright's, so this row overlaps nothing.
+   */
+  private edition(): void {
+    const t = this.g.text;
+    const name = editionName(this.g);
+    const fg = t.win.fg;
+    t.win.fg = Colour.darkGray;
+    t.moveTo(0x27 - name.length, 14);
+    this.g.print(name);
+    t.win.fg = fg;
   }
 
   /** "Select:" in the menu's top border, and the cursor after it. */
@@ -1645,11 +1719,12 @@ export class Intro {
     for (;;) {
       playTune(g, Tune.Theme, 'title');
       this.noSave = localSave.read() === null;
-      let choice = this.noSave ? 1 : 0;
+      let keys = this.menuKeys();
+      let choice = 0;
+      while (this.greyAt(keys, choice)) choice++;
       this.titleMenu(choice);
       let key = queued;
       queued = 0;
-      let keys = this.menuKeys();
       while (key <= 0x20) {
         // An update may come down while the title waits: its box, once a version, and its line added then.
         if ((await this.newsBox()) || (await this.updateBox())) {
@@ -1675,15 +1750,15 @@ export class Intro {
         switch (key) {
           case K.Left:
           case K.Up:
-            choice = choice === 0 ? keys.length - 1 : choice - 1;
-            if (choice === 0 && this.noSave) choice = keys.length - 1;
+            do choice = choice === 0 ? keys.length - 1 : choice - 1;
+            while (this.greyAt(keys, choice));
             this.menu(choice);
             menuSound(g, 'move');
             break;
           case K.Right:
           case K.Down:
-            choice = choice === keys.length - 1 ? 0 : choice + 1;
-            if (choice === 0 && this.noSave) choice = 1;
+            do choice = choice === keys.length - 1 ? 0 : choice + 1;
+            while (this.greyAt(keys, choice));
             this.menu(choice);
             menuSound(g, 'move');
             break;
@@ -1696,8 +1771,9 @@ export class Intro {
             key = 0x52;
             break;
           default: {
+            // (Launch From Steam is no choice: its letter is no key.)
             const i = keys.indexOf(String.fromCharCode(key));
-            if (i >= 0) this.menu(i);
+            if (i >= 0 && keys[i] !== 'L') this.menu(i);
             else key = 0;
           }
         }
@@ -1827,6 +1903,17 @@ export class Intro {
           g.draw.pen = 0;
           g.draw.fill(0, 0, 319, 199);
           await settingsMenu(g, true);
+          t.select(0);
+          g.printChar(0xff);
+          await this.title(false);
+          break;
+        }
+        case 0x54: {
+          // Steam (beta), the desktop app's (steamMenu.ts): on a cleared screen, as Settings is; the title drawn again after.
+          const { steamMenu } = await import('./steamMenu.ts');
+          g.draw.pen = 0;
+          g.draw.fill(0, 0, 319, 199);
+          await steamMenu(g);
           t.select(0);
           g.printChar(0xff);
           await this.title(false);

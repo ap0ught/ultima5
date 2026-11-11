@@ -8,7 +8,7 @@
  * (gamepad.ts) is not running then or is held off (screen.ts push): one reader at a time.
  */
 
-import { firstConnectedPad } from './connectedPad.ts';
+import { axesOf, buttonsOf, firstPad } from './pads.ts';
 
 export type Move = 'up' | 'down' | 'left' | 'right';
 export type Press = Move | 'a' | 'b';
@@ -150,14 +150,8 @@ export function padStep(state: PadState, pad: PadReading | null, now: number): P
 
 /** The first connected gamepad, read (as gamepad.ts takes the first). */
 function readPad(): PadReading | null {
-  const pads = typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : null;
-  const pad = firstConnectedPad(pads);
-  if (!pad) return null;
-  const buttons: boolean[] = [];
-  for (let i = 0; i < pad.buttons.length; i++) buttons.push(pad.buttons[i]?.pressed ?? false);
-  const axes: number[] = [];
-  for (let i = 0; i < pad.axes.length; i++) axes.push(pad.axes[i] ?? 0);
-  return { buttons, axes };
+  const pad = firstPad();
+  return pad ? { buttons: buttonsOf(pad), axes: axesOf(pad) } : null;
 }
 
 /** The boxes up now, the last on top: only the top one answers. */

@@ -8,7 +8,7 @@
 import { egaTileArt } from './ui/egaTiles.ts';
 import { CARVE_STYLES, type CarveStyle } from './ui/carve.ts';
 import { drawCombatMarks } from './game/combat.ts';
-import { gameFiles } from './boot.ts';
+import { chooseStore, gameFiles, steamNote } from './boot.ts';
 import { loadAppleArt, loadStandardArt, loadStandardFont } from './ui/loadArt.ts';
 import { HI_HEIGHT, HI_WIDTH } from './ui/framebuffer.ts';
 import { readFont } from './data/font.ts';
@@ -25,7 +25,7 @@ import { installPageHooks } from './ui/pageHooks.ts';
 import { PcSound } from './ui/sound.ts';
 import { loadOptions } from './game/settings.ts';
 import { chromeTone } from './game/chromeTone.ts';
-import { appQuit, launchWarning, warningDue, type CapacitorLike } from './ui/platform.ts';
+import { appQuit, appVersion, launchWarning, warningDue, type CapacitorLike } from './ui/platform.ts';
 import { showNotice } from './ui/notice.ts';
 import { installCrashHandler, reportCrash } from './ui/crash.ts';
 import { androidUpdates, desktopUpdates, webUpdates, type DesktopUpdates, type UpdateHook } from './ui/updates.ts';
@@ -246,6 +246,8 @@ async function start(): Promise<void> {
   });
   // The tile art, while the game's files are found: all of it is had before the notice goes.
   const art = loadStandardArt(font);
+  // Where the saves are kept, before anything reads one.
+  chooseStore();
   const files = await gameFiles();
   await lettering;
   const data = new GameData(files);
@@ -295,6 +297,9 @@ async function start(): Promise<void> {
   await keepStorage();
   installPageHooks(g, screen, canvas, tiles, sound);
   g.hooks.update = updateHook(capacitor);
+  const version = await appVersion(capacitor);
+  g.hooks.version = () => version;
+  g.hooks.note = steamNote;
   // The desktop app closes its window to quit (its last window closing quits it), the Android app exits; a browser
   // tab gets no Quit.
   g.hooks.quit = appQuit(location.protocol, () => window.close(), capacitor);
